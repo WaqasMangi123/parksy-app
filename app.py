@@ -1,10 +1,10 @@
-# app.py - Complete Parksy API for Free Hosting
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 import json
 from datetime import datetime
 import os
+import re
 
 class ParksyAPI:
     def __init__(self):
@@ -13,6 +13,152 @@ class ParksyAPI:
         self.base_url = "https://discover.search.hereapi.com/v1/discover"
         self.geocoding_url = "https://geocode.search.hereapi.com/v1/geocode"
         self.parking_api_url = "https://parking.api.here.com/parking/v1/find"
+
+        # Intent detection patterns
+        self.greeting_patterns = [
+            r'\b(hi|hello|hey|greetings?)\b',
+            r'\bgood\s+(morning|afternoon|evening)\b',
+            r'\bhowdy\b'
+        ]
+
+        self.thanks_patterns = [
+            r'\b(thank\s*you|thanks?|thx|ty)\b',
+            r'\bappreciate\b',
+            r'\bgrateful\b'
+        ]
+
+        self.goodbye_patterns = [
+            r'\b(bye|goodbye|see\s*ya|farewell)\b',
+            r'\btalk\s*to\s*you\s*later\b',
+            r'\bcatch\s*you\s*later\b'
+        ]
+
+        self.help_patterns = [
+            r'\b(help|assist|support)\b',
+            r'\bhow\s*(do|can)\s*i\b',
+            r'\bwhat\s*(can|do)\s*you\b',
+            r'\bcommands?\b'
+        ]
+
+        self.parking_keywords = [
+            'parking', 'park', 'spot', 'garage', 'lot', 'space',
+            'find', 'search', 'near', 'around', 'close', 'location',
+            'address', 'street', 'avenue', 'road', 'city', 'town'
+        ]
+
+    def detect_intent(self, message):
+        """Detect user intent from the message"""
+        message_lower = message.lower().strip()
+
+        # Check for greetings
+        for pattern in self.greeting_patterns:
+            if re.search(pattern, message_lower, re.IGNORECASE):
+                return 'greeting'
+
+        # Check for thanks
+        for pattern in self.thanks_patterns:
+            if re.search(pattern, message_lower, re.IGNORECASE):
+                return 'thanks'
+
+        # Check for goodbye
+        for pattern in self.goodbye_patterns:
+            if re.search(pattern, message_lower, re.IGNORECASE):
+                return 'goodbye'
+
+        # Check for help
+        for pattern in self.help_patterns:
+            if re.search(pattern, message_lower, re.IGNORECASE):
+                return 'help'
+
+        # Check if it's likely a location query
+        if self.is_location_query(message_lower):
+            return 'location_search'
+
+        # Default to general conversation
+        return 'general'
+
+    def is_location_query(self, message):
+        """Determine if message is likely a location search"""
+        message_lower = message.lower().strip()
+
+        # Too short to be a meaningful location
+        if len(message_lower) < 3:
+            return False
+
+        # Check for parking-related keywords
+        parking_keyword_count = sum(1 for keyword in self.parking_keywords
+                                  if keyword in message_lower)
+
+        # If it has parking keywords, likely a location search
+        if parking_keyword_count > 0:
+            return True
+
+        # Check for location indicators (addresses, cities, landmarks)
+        location_indicators = [
+            r'\d+.*\b(street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr)\b',
+            r'\b\d{5}\b',  # ZIP code
+            r'\bnear\s+\w+',
+            r'\bin\s+\w+',
+            r'\bat\s+\w+',
+            r'\b\w+\s+(city|town|center|mall|airport|station|university|college|hospital)\b'
+        ]
+
+        for pattern in location_indicators:
+            if re.search(pattern, message_lower):
+                return True
+
+        # Check if it looks like a place name (multiple words, proper capitalization)
+        words = message.split()
+        if len(words) >= 2 and any(word[0].isupper() for word in words if word):
+            return True
+
+        return False
+
+    def generate_conversational_response(self, intent, message):
+        """Generate appropriate conversational responses"""
+        responses = {
+            'greeting': {
+                'message': 'Hello! 👋 Welcome to Parksy!',
+                'response': 'I\'m here to help you find parking spots. Just tell me where you need to park, and I\'ll find the best options for you!',
+                'suggestions': [
+                    'Try: "Find parking near Times Square"',
+                    'Try: "Parking in downtown Seattle"',
+                    'Try: "Show parking at 123 Main Street"'
+                ]
+            },
+            'thanks': {
+                'message': 'You\'re very welcome! 😊',
+                'response': 'I\'m glad I could help you find parking. Drive safely and have a great day!',
+                'suggestions': [
+                    'Need parking somewhere else?',
+                    'Want to search another location?'
+                ]
+            },
+            'goodbye': {
+                'message': 'Goodbye! 👋',
+                'response': 'Thanks for using Parksy! Come back anytime you need help finding parking.',
+                'suggestions': []
+            },
+            'help': {
+                'message': 'I\'m here to help you find parking! 🅿️',
+                'response': 'Simply tell me where you need to park, and I\'ll search for available spots nearby with details like pricing, availability, and walking distance.',
+                'suggestions': [
+                    'Example: "Find parking near Central Park"',
+                    'Example: "Parking at LAX Airport"',
+                    'Example: "Show me parking in Boston downtown"'
+                ]
+            },
+            'general': {
+                'message': 'I\'m Parksy, your parking assistant! 🅿️',
+                'response': 'I specialize in finding parking spots. If you need parking somewhere, just let me know the location and I\'ll help you find the best options!',
+                'suggestions': [
+                    'Tell me where you need parking',
+                    'Example: "Find parking near [your destination]"'
+                ]
+            }
+        }
+
+        return responses.get(intent, responses['general'])
 
     def geocode_location(self, location_query):
         """Convert location query to coordinates"""
@@ -191,9 +337,11 @@ def home():
     """API home endpoint"""
     return jsonify({
         "message": "🅿️ Parksy API is running!",
-        "version": "1.0",
+        "version": "2.0",
         "status": "active",
+        "features": ["Smart intent detection", "Conversational responses", "Parking search"],
         "endpoints": {
+            "chat": "/api/chat",
             "search": "/api/search-parking",
             "details": "/api/parking-details",
             "health": "/api/health"
@@ -207,25 +355,60 @@ def health_check():
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "api_version": "1.0",
+        "api_version": "2.0",
         "here_api_configured": bool(os.getenv('HERE_API_KEY'))
     })
 
-@app.route('/api/search-parking', methods=['POST'])
-def search_parking():
-    """Main parking search endpoint"""
+@app.route('/api/chat', methods=['POST'])
+def chat():
+    """Main chat endpoint with intent detection"""
     try:
         data = request.get_json()
 
-        if not data or 'location' not in data:
+        if not data or 'message' not in data:
             return jsonify({
-                "error": "Location is required",
+                "error": "Message is required",
                 "status": "error",
-                "example": {"location": "Times Square, New York"}
+                "example": {"message": "Find parking near Times Square"}
             }), 400
 
-        location = data['location']
+        user_message = data['message'].strip()
 
+        if not user_message:
+            return jsonify({
+                "error": "Message cannot be empty",
+                "status": "error"
+            }), 400
+
+        # Detect user intent
+        intent = parksy.detect_intent(user_message)
+
+        # Handle non-location intents
+        if intent != 'location_search':
+            response_data = parksy.generate_conversational_response(intent, user_message)
+            return jsonify({
+                "message": response_data['message'],
+                "response": response_data['response'],
+                "suggestions": response_data['suggestions'],
+                "intent": intent,
+                "status": "success",
+                "type": "conversation",
+                "timestamp": datetime.now().isoformat()
+            })
+
+        # Handle location search
+        return handle_parking_search(user_message)
+
+    except Exception as e:
+        return jsonify({
+            "error": str(e),
+            "status": "error",
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+def handle_parking_search(location):
+    """Handle parking search requests"""
+    try:
         # Check if HERE API key is configured
         if not os.getenv('HERE_API_KEY'):
             return jsonify({
@@ -239,9 +422,15 @@ def search_parking():
 
         if lat is None:
             return jsonify({
-                "error": "Location not found",
+                "message": "🚫 Location not found",
+                "response": f"I couldn't find '{location}'. Could you try a more specific address or landmark?",
+                "suggestions": [
+                    "Try adding city name: 'downtown + [city name]'",
+                    "Use full address: '123 Main Street, City'",
+                    "Try landmarks: 'near [mall/airport/station name]'"
+                ],
                 "status": "error",
-                "suggestion": "Try a more specific address or city name"
+                "type": "location_error"
             }), 404
 
         # Search for parking spots
@@ -249,13 +438,20 @@ def search_parking():
 
         if not parking_spots:
             return jsonify({
-                "message": "No parking spots found in this area",
-                "status": "success",
+                "message": "🅿️ No parking found",
+                "response": f"I couldn't find parking spots near '{full_address}'. This might be a remote area or the search needs refinement.",
+                "suggestions": [
+                    "Try searching near a major landmark",
+                    "Look for nearby commercial areas",
+                    "Check for public parking in the city center"
+                ],
                 "data": {
                     "location": full_address,
                     "coordinates": {"lat": lat, "lng": lng},
                     "parking_spots": []
-                }
+                },
+                "status": "success",
+                "type": "no_results"
             })
 
         # Process and score parking spots
@@ -281,16 +477,47 @@ def search_parking():
         # Sort by score
         processed_spots.sort(key=lambda x: x['score'], reverse=True)
 
+        # Create response message
+        top_spot = processed_spots[0] if processed_spots else None
+        response_message = f"🅿️ Found {len(processed_spots)} parking options near {full_address}"
+
+        if top_spot:
+            distance_text = f"{top_spot['distance']}m away" if top_spot['distance'] < 1000 else f"{top_spot['distance']/1000:.1f}km away"
+            response_message += f". Best option: {top_spot['title']} ({distance_text})"
+
         return jsonify({
-            "message": f"Found {len(processed_spots)} parking options",
-            "status": "success",
+            "message": response_message,
+            "response": f"Here are the parking options I found, sorted by convenience and availability:",
             "data": {
                 "location": full_address,
                 "coordinates": {"lat": lat, "lng": lng},
                 "search_timestamp": datetime.now().isoformat(),
                 "parking_spots": processed_spots
-            }
+            },
+            "status": "success",
+            "type": "parking_results"
         })
+
+    except Exception as e:
+        return jsonify({
+            "error": str(e),
+            "status": "error",
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/search-parking', methods=['POST'])
+def search_parking():
+    """Legacy parking search endpoint (for backward compatibility)"""
+    try:
+        data = request.get_json()
+        if not data or 'location' not in data:
+            return jsonify({
+                "error": "Location is required",
+                "status": "error",
+                "example": {"location": "Times Square, New York"}
+            }), 400
+
+        return handle_parking_search(data['location'])
 
     except Exception as e:
         return jsonify({
@@ -339,5 +566,4 @@ def parking_details():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
-
 
