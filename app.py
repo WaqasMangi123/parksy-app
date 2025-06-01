@@ -955,7 +955,7 @@ def chat():
         response['timestamp'] = datetime.now().isoformat()
         response['coverage'] = "UK Only"
         response['data_source'] = "HERE.com + UK Parking Regulations"
-        
+    
         return jsonify(response)
 
     except Exception as e:
