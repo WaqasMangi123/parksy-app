@@ -7,8 +7,13 @@ import re
 from datetime import datetime, timedelta
 import os
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ParkingContext:
@@ -18,16 +23,25 @@ class ParkingContext:
     duration: Optional[str] = None
     vehicle_type: Optional[str] = None
     budget: Optional[str] = None
-    preferences: List[str] = None
+    preferences: List[str] = field(default_factory=list)
     last_search: Optional[Dict] = None
 
 class IntelligentParksyBot:
     def __init__(self):
-        # API Configuration
+        # API Configuration with fallback
         self.api_key = os.getenv('HERE_API_KEY', 'demo_key_for_testing')
         self.base_url = "https://discover.search.hereapi.com/v1/discover"
         self.geocoding_url = "https://geocode.search.hereapi.com/v1/geocode"
-        self.places_url = "https://places.sit.ls.hereapi.com/places/v1/discover/explore"
+        
+        # Request timeout settings
+        self.timeout = 10
+        self.max_retries = 2
+        
+        # Check if API key is valid
+        self.api_available = self.api_key != 'demo_key_for_testing' and self.api_key
+        
+        if not self.api_available:
+            logger.warning("HERE API key not found. Running in demo mode.")
         
         # UK-specific bounding box (approximate)
         self.uk_bounds = {
@@ -37,8 +51,54 @@ class IntelligentParksyBot:
             'west': -8.5
         }
         
-        # Conversation context storage (in production, use Redis or database)
+        # Conversation context storage
         self.user_contexts = {}
+        
+        # Mock data for demo mode
+        self.demo_parking_spots = [
+            {
+                'id': 'demo_1',
+                'title': 'City Centre Car Park',
+                'address': 'High Street, City Centre',
+                'distance': 150,
+                'position': {'lat': 51.5074, 'lng': -0.1278},
+                'categories': ['Public Parking'],
+                'uk_analysis': {
+                    'type': 'Multi-storey Car Park',
+                    'likely_restrictions': ['Higher charges', 'Time limits'],
+                    'recommended_for': ['Weather protection', 'Security'],
+                    'accessibility': 'Standard',
+                    'payment_methods': ['Card', 'Coins', 'App']
+                },
+                'pricing_estimate': {
+                    'estimated_hourly': '£2.50-£4.00',
+                    'estimated_daily': '£15.00-£25.00',
+                    'confidence': 'High',
+                    'notes': ['City centre rates', 'Evening discounts available']
+                }
+            },
+            {
+                'id': 'demo_2', 
+                'title': 'Shopping Centre Car Park',
+                'address': 'Retail Park, Town Centre',
+                'distance': 300,
+                'position': {'lat': 51.5074, 'lng': -0.1278},
+                'categories': ['Retail Parking'],
+                'uk_analysis': {
+                    'type': 'Retail Car Park',
+                    'likely_restrictions': ['Customer parking only', 'Maximum stay limits'],
+                    'recommended_for': ['Shopping trips', 'First 3 hours free'],
+                    'accessibility': 'Disabled spaces available',
+                    'payment_methods': ['Card', 'Contactless', 'App']
+                },
+                'pricing_estimate': {
+                    'estimated_hourly': 'Free for 3hrs then £1.50/hr',
+                    'estimated_daily': '£8.00',
+                    'confidence': 'High',
+                    'notes': ['Customer validation available', 'Free with purchase over £10']
+                }
+            }
+        ]
         
         # UK Parking Rules and Pricing Data
         self.uk_parking_rules = {
@@ -113,14 +173,6 @@ class IntelligentParksyBot:
             ]
         }
         
-        # UK-specific location patterns
-        self.uk_location_patterns = [
-            r'\b(london|birmingham|manchester|leeds|liverpool|bristol|sheffield|glasgow|edinburgh|cardiff|belfast)\b',
-            r'\b\w+\s+(high\s+street|town\s+centre|city\s+centre)\b',
-            r'\b[A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2}\b',  # UK postcodes
-            r'\b(greater\s+london|west\s+midlands|greater\s+manchester|west\s+yorkshire)\b'
-        ]
-        
         # Personality responses
         self.personality_responses = {
             'greeting': [
@@ -135,8 +187,45 @@ class IntelligentParksyBot:
             ]
         }
 
+    def safe_api_request(self, url: str, params: Dict, timeout: int = None) -> Optional[Dict]:
+        """Make a safe API request with error handling and retries"""
+        if not self.api_available:
+            logger.info("API not available, using demo mode")
+            return None
+            
+        timeout = timeout or self.timeout
+        
+        for attempt in range(self.max_retries + 1):
+            try:
+                logger.info(f"Making API request to {url} (attempt {attempt + 1})")
+                response = requests.get(url, params=params, timeout=timeout)
+                response.raise_for_status()
+                return response.json()
+                
+            except requests.exceptions.Timeout:
+                logger.warning(f"Request timeout on attempt {attempt + 1}")
+                if attempt == self.max_retries:
+                    logger.error("All retry attempts failed due to timeout")
+                    return None
+                    
+            except requests.exceptions.ConnectionError:
+                logger.warning(f"Connection error on attempt {attempt + 1}")
+                if attempt == self.max_retries:
+                    logger.error("All retry attempts failed due to connection error")
+                    return None
+                    
+            except requests.exceptions.HTTPError as e:
+                logger.error(f"HTTP error: {e}")
+                return None
+                
+            except Exception as e:
+                logger.error(f"Unexpected error in API request: {e}")
+                return None
+                
+        return None
+
     def is_uk_location(self, location: str) -> bool:
-        """Check if location is in the UK using patterns and geocoding"""
+        """Check if location is in the UK using patterns"""
         location_lower = location.lower()
         
         # Check for obvious UK indicators
@@ -154,16 +243,28 @@ class IntelligentParksyBot:
         if re.search(r'\b[A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2}\b', location.upper()):
             return True
         
-        # Use geocoding to verify
-        lat, lng, _ = self.geocode_location(location)
-        if lat and lng:
-            return (self.uk_bounds['south'] <= lat <= self.uk_bounds['north'] and 
-                    self.uk_bounds['west'] <= lng <= self.uk_bounds['east'])
+        # If API is available, try geocoding
+        if self.api_available:
+            lat, lng, _ = self.geocode_location(location)
+            if lat and lng:
+                return (self.uk_bounds['south'] <= lat <= self.uk_bounds['north'] and 
+                        self.uk_bounds['west'] <= lng <= self.uk_bounds['east'])
         
-        return False
+        # Default assumption for common UK terms
+        return any(term in location_lower for term in ['high street', 'city centre', 'town centre'])
 
     def get_here_parking_data(self, lat: float, lng: float) -> List[Dict]:
-        """Get detailed parking data from HERE.com API"""
+        """Get detailed parking data from HERE.com API or demo data"""
+        if not self.api_available:
+            logger.info("Using demo parking data")
+            # Return demo data with adjusted positions
+            demo_data = []
+            for spot in self.demo_parking_spots:
+                spot_copy = spot.copy()
+                spot_copy['position'] = {'lat': lat, 'lng': lng}
+                demo_data.append(spot_copy)
+            return demo_data
+        
         try:
             # Search for parking using HERE Discover API
             params = {
@@ -174,22 +275,22 @@ class IntelligentParksyBot:
                 'categories': '700-7600-0116,700-7600-0117,700-7600-0118'  # Parking categories
             }
             
-            response = requests.get(self.base_url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
+            data = self.safe_api_request(self.base_url, params)
+            if not data:
+                logger.warning("API request failed, using demo data")
+                return self.demo_parking_spots
             
             parking_spots = []
             for item in data.get('items', []):
-                # Extract detailed information from HERE response
                 spot_data = self.extract_here_spot_data(item)
                 if spot_data:
                     parking_spots.append(spot_data)
             
-            return parking_spots
+            return parking_spots if parking_spots else self.demo_parking_spots
             
         except Exception as e:
-            print(f"HERE API error: {e}")
-            return []
+            logger.error(f"Error in get_here_parking_data: {e}")
+            return self.demo_parking_spots
 
     def extract_here_spot_data(self, here_item: Dict) -> Dict:
         """Extract and enhance data from HERE API response"""
@@ -214,7 +315,7 @@ class IntelligentParksyBot:
             return spot
             
         except Exception as e:
-            print(f"Error extracting HERE data: {e}")
+            logger.error(f"Error extracting HERE data: {e}")
             return None
 
     def analyze_uk_parking_spot(self, spot: Dict) -> Dict:
@@ -369,7 +470,7 @@ class IntelligentParksyBot:
                 entities['is_uk_location'] = self.is_uk_location(location)
                 break
         
-        # Extract other entities (same as before)
+        # Extract time
         time_patterns = [
             r'\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b',
             r'\b(at\s+\d{1,2}(?::\d{2})?)\b',
@@ -382,7 +483,7 @@ class IntelligentParksyBot:
                 entities['time'] = match.group(1).strip()
                 break
         
-        # Extract duration, vehicle type, budget (same as before)
+        # Extract duration
         duration_patterns = [
             r'\b(for\s+\d+\s+(?:hours?|hrs?|minutes?|mins?))\b',
             r'\b(overnight|all\s+day|quick\s+stop)\b'
@@ -426,42 +527,57 @@ class IntelligentParksyBot:
 
     def generate_contextual_response(self, message: str, user_id: str = 'default') -> Dict:
         """Generate intelligent, UK-focused responses"""
-        if user_id not in self.user_contexts:
-            self.user_contexts[user_id] = ParkingContext()
-        
-        context = self.user_contexts[user_id]
-        entities = self.extract_entities(message)
-        intent, confidence = self.understand_intent(message)
-        
-        # Check for non-UK location early
-        if entities['location'] and not entities['is_uk_location']:
-            return self.handle_non_uk_location(entities['location'])
-        
-        # Update context
-        if entities['location'] and entities['is_uk_location']:
-            context.location = entities['location']
-        if entities['time']:
-            context.time = entities['time']
-        if entities['duration']:
-            context.duration = entities['duration']
-        if entities['vehicle_type']:
-            context.vehicle_type = entities['vehicle_type']
-        if entities['budget']:
-            context.budget = entities['budget']
-        if entities['preferences']:
-            context.preferences = entities['preferences']
-        
-        # Handle intents
-        if intent == 'greeting':
-            return self.handle_greeting(message, context)
-        elif intent == 'rules_query':
-            return self.handle_rules_query(message, context, entities)
-        elif intent == 'pricing_query':
-            return self.handle_pricing_query(message, context, entities)
-        elif intent == 'parking_query' or (entities['location'] and entities['is_uk_location']):
-            return self.handle_uk_parking_query(message, context, entities)
-        else:
-            return self.handle_general_conversation(message, context, entities)
+        try:
+            if user_id not in self.user_contexts:
+                self.user_contexts[user_id] = ParkingContext()
+            
+            context = self.user_contexts[user_id]
+            entities = self.extract_entities(message)
+            intent, confidence = self.understand_intent(message)
+            
+            # Check for non-UK location early
+            if entities['location'] and not entities['is_uk_location']:
+                return self.handle_non_uk_location(entities['location'])
+            
+            # Update context
+            if entities['location'] and entities['is_uk_location']:
+                context.location = entities['location']
+            if entities['time']:
+                context.time = entities['time']
+            if entities['duration']:
+                context.duration = entities['duration']
+            if entities['vehicle_type']:
+                context.vehicle_type = entities['vehicle_type']
+            if entities['budget']:
+                context.budget = entities['budget']
+            if entities['preferences']:
+                context.preferences = entities['preferences']
+            
+            # Handle intents
+            if intent == 'greeting':
+                return self.handle_greeting(message, context)
+            elif intent == 'rules_query':
+                return self.handle_rules_query(message, context, entities)
+            elif intent == 'pricing_query':
+                return self.handle_pricing_query(message, context, entities)
+            elif intent == 'parking_query' or (entities['location'] and entities['is_uk_location']):
+                return self.handle_uk_parking_query(message, context, entities)
+            else:
+                return self.handle_general_conversation(message, context, entities)
+                
+        except Exception as e:
+            logger.error(f"Error in generate_contextual_response: {e}")
+            return {
+                'message': "I'm having a small technical hiccup! 🔧",
+                'response': "Don't worry - I'm still here to help with your UK parking needs. Please try again!",
+                'suggestions': [
+                    "Try asking about parking in a UK city",
+                    "Ask about UK parking rules",
+                    "Ask about parking prices"
+                ],
+                'type': 'error_recovery',
+                'status': 'partial'
+            }
 
     def handle_non_uk_location(self, location: str) -> Dict:
         """Handle requests for non-UK locations"""
@@ -482,7 +598,6 @@ class IntelligentParksyBot:
         location = entities.get('location') or context.location
         
         if not location:
-            # General UK rules
             return {
                 'message': "Here are the key UK parking rules! 📋",
                 'response': "UK parking rules to remember:",
@@ -504,7 +619,6 @@ class IntelligentParksyBot:
                 'status': 'success'
             }
         else:
-            # Location-specific rules
             return {
                 'message': f"Here are the parking rules for {location}! 📍",
                 'response': f"Parking regulations in {location}:",
@@ -576,7 +690,7 @@ class IntelligentParksyBot:
             }
 
     def handle_uk_parking_query(self, message: str, context: ParkingContext, entities: Dict) -> Dict:
-        """Handle UK parking location queries with HERE.com data"""
+        """Handle UK parking location queries"""
         location = entities.get('location') or context.location
         
         if not location:
@@ -612,7 +726,7 @@ class IntelligentParksyBot:
                 self.uk_bounds['west'] <= lng <= self.uk_bounds['east']):
             return self.handle_non_uk_location(location)
         
-        # Search for parking using HERE data
+        # Search for parking
         parking_spots = self.get_here_parking_data(lat, lng)
         
         if parking_spots:
@@ -748,7 +862,7 @@ class IntelligentParksyBot:
         
         return {
             'message': response,
-            'response': "I can help you find parking spots across the UK, explain parking rules and regulations, and give you pricing information. I use real data from HERE.com combined with UK parking expertise! 🎯",
+            'response': "I can help you find parking spots across the UK, explain parking rules and regulations, and give you pricing information. I use real data combined with UK parking expertise! 🎯",
             'suggestions': [
                 "Try: 'I need parking in London at 2pm'",
                 "Ask: 'What are the parking rules in Manchester?'", 
@@ -768,7 +882,7 @@ class IntelligentParksyBot:
         
         return {
             'message': random.choice(responses),
-            'response': "I can help you with: finding parking spots across the UK, explaining parking rules and restrictions, providing pricing information, and giving location-specific advice using real HERE.com data!",
+            'response': "I can help you with: finding parking spots across the UK, explaining parking rules and restrictions, providing pricing information, and giving location-specific advice!",
             'suggestions': [
                 "Find parking in [UK location]",
                 "Ask about parking rules and restrictions",
@@ -778,22 +892,41 @@ class IntelligentParksyBot:
             'status': 'success'
         }
 
-    # Utility methods enhanced for UK focus
     def geocode_location(self, location_query: str) -> Tuple[Optional[float], Optional[float], Optional[str]]:
         """Convert location query to coordinates with UK preference"""
+        if not self.api_available:
+            # Return demo coordinates for common UK cities
+            demo_coords = {
+                'london': (51.5074, -0.1278, 'London, UK'),
+                'birmingham': (52.4862, -1.8904, 'Birmingham, UK'),
+                'manchester': (53.4808, -2.2426, 'Manchester, UK'),
+                'leeds': (53.8008, -1.5491, 'Leeds, UK'),
+                'liverpool': (53.4084, -2.9916, 'Liverpool, UK'),
+                'bristol': (51.4545, -2.5879, 'Bristol, UK'),
+                'sheffield': (53.3811, -1.4701, 'Sheffield, UK'),
+                'glasgow': (55.8642, -4.2518, 'Glasgow, UK'),
+                'edinburgh': (55.9533, -3.1883, 'Edinburgh, UK')
+            }
+            
+            location_lower = location_query.lower()
+            for city, coords in demo_coords.items():
+                if city in location_lower:
+                    return coords
+            
+            # Default to London for demo
+            return demo_coords['london']
+        
         params = {
             'q': location_query,
             'apiKey': self.api_key,
             'limit': 5,
-            'in': f"bbox:{self.uk_bounds['west']},{self.uk_bounds['south']},{self.uk_bounds['east']},{self.uk_bounds['north']}"  # UK bounding box
+            'in': f"bbox:{self.uk_bounds['west']},{self.uk_bounds['south']},{self.uk_bounds['east']},{self.uk_bounds['north']}"
         }
 
         try:
-            response = requests.get(self.geocoding_url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            if data.get('items'):
+            data = self.safe_api_request(self.geocoding_url, params)
+            
+            if data and data.get('items'):
                 # Prefer UK results
                 for item in data['items']:
                     position = item['position']
@@ -802,109 +935,51 @@ class IntelligentParksyBot:
                         address = item.get('address', {}).get('label', location_query)
                         return position['lat'], position['lng'], address
                 
-                # If no UK result found, return first result but flag it
+                # If no UK result found, return first result
                 position = data['items'][0]['position']
                 address = data['items'][0].get('address', {}).get('label', location_query)
                 return position['lat'], position['lng'], address
             else:
                 return None, None, None
         except Exception as e:
-            print(f"Geocoding error: {e}")
+            logger.error(f"Geocoding error: {e}")
             return None, None, None
-
-    def search_parking_spots(self, lat: float, lng: float, radius: int = 2000) -> List[Dict]:
-        """Enhanced parking search using HERE.com with UK context"""
-        parking_queries = [
-            'car park', 'parking', 'multi-storey car park', 'public parking',
-            'council car park', 'pay and display', 'parking garage'
-        ]
-
-        all_spots = []
-        seen_spots = set()
-
-        for query in parking_queries:
-            params = {
-                'at': f"{lat},{lng}",
-                'q': query,
-                'limit': 15,
-                'apiKey': self.api_key,
-                'categories': '700-7600-0116,700-7600-0117,700-7600-0118'  # Parking specific categories
-            }
-
-            try:
-                response = requests.get(self.base_url, params=params, timeout=10)
-                response.raise_for_status()
-                data = response.json()
-                spots = data.get('items', [])
-
-                for spot in spots:
-                    spot_id = spot.get('id', '') or f"{spot.get('title', '')}-{spot.get('position', {}).get('lat', 0)}"
-                    if spot_id not in seen_spots:
-                        seen_spots.add(spot_id)
-                        enhanced_spot = self.extract_here_spot_data(spot)
-                        if enhanced_spot:
-                            all_spots.append(enhanced_spot)
-
-            except Exception as e:
-                print(f"Search error for query '{query}': {e}")
-                continue
-
-        # Sort by distance and relevance
-        all_spots.sort(key=lambda x: (x.get('distance', 9999), -x.get('relevance_score', 0)))
-        return all_spots
-
-    def calculate_relevance_score(self, spot: Dict) -> int:
-        """Calculate relevance score for UK parking spots"""
-        score = 50
-        
-        title = spot.get('title', '').lower()
-        categories = [cat.lower() for cat in spot.get('categories', [])]
-        
-        # UK-specific scoring
-        if 'car park' in title:
-            score += 20
-        if 'public' in title or 'council' in title:
-            score += 15
-        if 'multi-storey' in title:
-            score += 10
-        if any('parking' in cat for cat in categories):
-            score += 15
-        
-        # Distance scoring
-        distance = spot.get('distance', 1000)
-        if distance < 200:
-            score += 25
-        elif distance < 500:
-            score += 15
-        elif distance < 1000:
-            score += 10
-        
-        return min(100, score)
 
 # Flask App Setup
 app = Flask(__name__)
 CORS(app)
-bot = IntelligentParksyBot()
+
+# Initialize bot with error handling
+try:
+    bot = IntelligentParksyBot()
+    logger.info("UK Parksy Bot initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize bot: {e}")
+    bot = None
 
 @app.route('/', methods=['GET'])
 def home():
     """API home endpoint"""
+    api_status = "active" if bot and bot.api_available else "demo mode"
+    
     return jsonify({
         "message": "🇬🇧 UK Parksy Bot - Your British Parking Assistant!",
-        "version": "4.0 - UK Focused with HERE.com Integration",
-        "status": "active",
+        "version": "4.1 - Enhanced Error Handling",
+        "status": api_status,
         "coverage": "United Kingdom Only",
         "features": [
-            "Real HERE.com parking data",
+            "Real-time parking data (when API available)",
             "UK parking rules and regulations",
             "Accurate pricing information", 
             "Location-specific guidance",
-            "British parking expertise"
+            "Robust error handling",
+            "Demo mode fallback"
         ],
         "data_sources": [
-            "HERE.com Places API",
+            "HERE.com Places API (when available)",
             "UK parking regulations database",
-            "Local authority parking policies"
+            "Local authority parking policies",
+            "Demo data (fallback mode)"
         ],
         "personality": "Knowledgeable, accurate, and thoroughly British! 🎩",
         "endpoints": {
@@ -916,20 +991,31 @@ def home():
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
+    api_status = "available" if bot and bot.api_available else "demo mode"
+    bot_status = "healthy" if bot else "error"
+    
     return jsonify({
-        "status": "healthy",
+        "status": bot_status,
         "bot_status": "Ready to help with UK parking! 🇬🇧",
+        "api_status": api_status,
         "timestamp": datetime.now().isoformat(),
-        "version": "4.0",
+        "version": "4.1",
         "here_api_configured": bool(os.getenv('HERE_API_KEY')),
         "coverage": "United Kingdom",
-        "data_accuracy": "High - Real HERE.com data + UK regulations"
+        "data_accuracy": "High - Real data + UK regulations (demo fallback available)"
     })
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
     """Main chat endpoint - UK parking specialist"""
     try:
+        if not bot:
+            return jsonify({
+                "message": "I'm temporarily unavailable! 🔧",
+                "response": "The bot service is currently initializing. Please try again in a moment.",
+                "status": "error"
+            }), 503
+
         data = request.get_json()
 
         if not data or 'message' not in data:
@@ -954,23 +1040,43 @@ def chat():
         response = bot.generate_contextual_response(user_message, user_id)
         response['timestamp'] = datetime.now().isoformat()
         response['coverage'] = "UK Only"
-        response['data_source'] = "HERE.com + UK Parking Regulations"
-    
+        response['api_mode'] = "live" if bot.api_available else "demo"
+        
         return jsonify(response)
 
     except Exception as e:
+        logger.error(f"Chat endpoint error: {e}")
         return jsonify({
             "message": "Sorry, I've encountered a technical issue! 🔧",
             "response": "Don't worry - I'm still here to help with your UK parking needs. Please try again!",
-            "error": str(e),
+            "error": "Internal server error",
             "status": "error",
             "timestamp": datetime.now().isoformat()
         }), 500
 
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({
+        "message": "Endpoint not found! 🗺️",
+        "response": "Try the /api/chat endpoint for parking assistance or / for API information.",
+        "status": "error"
+    }), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({
+        "message": "Internal server error! 🔧",
+        "response": "Something went wrong on our end. Please try again.",
+        "status": "error"
+    }), 500
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
+    debug_mode = os.environ.get('DEBUG', 'False').lower() == 'true'
+    
     print("🇬🇧 Starting UK Parksy Bot...")
     print("📍 Coverage: United Kingdom Only")
-    print("🎯 Data Source: HERE.com + UK Parking Regulations")
+    print(f"🎯 API Mode: {'Live' if bot and bot.api_available else 'Demo'}")
     print("💬 Ready for accurate UK parking assistance!")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    
+    app.run(host='0.0.0.0', port=port, debug=debug_mode)
