@@ -1,1233 +1,586 @@
-# intelligent_parksy.py - AI-Powered UK Parking Assistant with HERE.com Integration
-from flask import Flask, request, jsonify
-from flask_cors import CORS
 import requests
 import json
 import re
 from datetime import datetime, timedelta
-import os
 import random
-from dataclasses import dataclass, field
+import os
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
-import logging
-import uuid
-
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 @dataclass
 class ParkingContext:
-    """Store conversation context"""
+    """Store conversation context for parking queries"""
     location: Optional[str] = None
-    time: Optional[str] = None
-    duration: Optional[str] = None
-    vehicle_type: Optional[str] = None
-    budget: Optional[str] = None
-    preferences: List[str] = field(default_factory=list)
+    time_context: Optional[str] = None
+    duration: Optional[int] = None
+    preferences: Optional[Dict] = None
     last_search: Optional[Dict] = None
 
-class IntelligentParksyBot:
+class EnhancedParkingChatbot:
     def __init__(self):
-        # API Configuration with fallback
+        """Initialize the enhanced parking chatbot with HERE.com integration"""
+        # API Configuration for HERE.com
         self.api_key = os.getenv('HERE_API_KEY', 'demo_key_for_testing')
-        self.base_url = "https://discover.search.hereapi.com/v1/discover"
+        self.discover_url = "https://discover.search.hereapi.com/v1/discover"
         self.geocoding_url = "https://geocode.search.hereapi.com/v1/geocode"
-        self.revgeocoding_url = "https://revgeocode.search.hereapi.com/v1/revgeocode"
-        
-        # Request timeout settings
-        self.timeout = 10
-        self.max_retries = 2
-        
-        # Check if API key is valid
-        self.api_available = self.api_key != 'demo_key_for_testing' and self.api_key
-        
-        if not self.api_available:
-            logger.warning("HERE API key not found. Running in demo mode.")
-        
-        # UK-specific bounding box (approximate)
-        self.uk_bounds = {
-            'north': 60.9,
-            'south': 49.8,
-            'east': 2.1,
-            'west': -8.5
-        }
-        
+        self.parking_url = "https://parking.search.hereapi.com/v1/browse"  # Hypothetical parking endpoint
+
         # Conversation context storage
         self.user_contexts = {}
-        
-        # Mock data for demo mode and unrecognized locations
-        self.demo_parking_spots = [
-            {
-                'id': f'demo_{uuid.uuid4()}',
-                'title': 'City Centre Car Park',
-                'address': 'High Street, City Centre',
-                'distance': 150,
-                'position': {'lat': 51.5074, 'lng': -0.1278},
-                'categories': ['Public Parking'],
-                'parking_type': 'off-street',
-                'availability': {'status': 'open', 'spaces': 50, 'last_updated': datetime.now().isoformat()},
-                'uk_analysis': {
-                    'type': 'Multi-storey Car Park',
-                    'likely_restrictions': ['Higher charges', 'Time limits'],
-                    'recommended_for': ['Weather protection', 'Security'],
-                    'accessibility': 'Disabled spaces available',
-                    'payment_methods': ['Card', 'Coins', 'App']
-                },
-                'pricing_estimate': {
-                    'estimated_hourly': '£2.50-£4.00',
-                    'estimated_daily': '£15.00-£25.00',
-                    'confidence': 'High',
-                    'notes': ['City centre rates', 'Evening discounts available']
-                },
-                'accessibility_features': ['Disabled parking', 'Lifts available'],
-                'ev_charging': {'available': False, 'charger_type': None}
-            },
-            {
-                'id': f'demo_{uuid.uuid4()}',
-                'title': 'On-Street Parking',
-                'address': 'Main Road, Town Centre',
-                'distance': 200,
-                'position': {'lat': 51.5074, 'lng': -0.1278},
-                'categories': ['On-Street Parking'],
-                'parking_type': 'on-street',
-                'availability': {'status': 'open', 'spaces': 10, 'last_updated': datetime.now().isoformat()},
-                'uk_analysis': {
-                    'type': 'On-Street Parking',
-                    'likely_restrictions': ['Pay and Display', 'Maximum 2 hours'],
-                    'recommended_for': ['Short stays', 'Quick visits'],
-                    'accessibility': 'Standard',
-                    'payment_methods': ['Coins', 'App']
-                },
-                'pricing_estimate': {
-                    'estimated_hourly': '£1.00-£2.00',
-                    'estimated_daily': 'Not applicable',
-                    'confidence': 'Medium',
-                    'notes': ['Pay and Display 8am-6pm']
-                },
-                'accessibility_features': ['Some disabled bays'],
-                'ev_charging': {'available': False, 'charger_type': None}
-            },
-            {
-                'id': f'demo_{uuid.uuid4()}',
-                'title': 'Retail Park EV Station',
-                'address': 'Retail Park, Town Centre',
-                'distance': 300,
-                'position': {'lat': 51.5074, 'lng': -0.1278},
-                'categories': ['Retail Parking', 'EV Charging'],
-                'parking_type': 'off-street',
-                'availability': {'status': 'almost full', 'spaces': 5, 'last_updated': datetime.now().isoformat()},
-                'uk_analysis': {
-                    'type': 'Retail Car Park with EV Charging',
-                    'likely_restrictions': ['Customer parking only', 'Maximum stay limits'],
-                    'recommended_for': ['Shopping trips', 'Electric vehicles'],
-                    'accessibility': 'Disabled spaces available',
-                    'payment_methods': ['Card', 'Contactless', 'App']
-                },
-                'pricing_estimate': {
-                    'estimated_hourly': 'Free for 3hrs then £1.50/hr',
-                    'estimated_daily': '£8.00',
-                    'confidence': 'High',
-                    'notes': ['Customer validation available', 'Free with purchase over £10']
-                },
-                'accessibility_features': ['Disabled parking', 'Wide spaces'],
-                'ev_charging': {'available': True, 'charger_type': 'Type 2', 'operating_hours': '24/7'}
-            }
+
+        # Mock data for locations not found
+        self.mock_parking_types = [
+            "On-Street Metered Parking", "Municipal Parking Lot", "Private Garage",
+            "Shopping Center Parking", "Residential Permit Zone", "EV Charging Station",
+            "Park & Ride Facility", "Hospital Parking", "University Parking"
         ]
-        
-        # UK Parking Rules and Pricing Data
+
+        # UK Parking Rules
         self.uk_parking_rules = {
-            'general': {
-                'double_yellow_lines': 'No parking at any time',
-                'single_yellow_lines': 'Restrictions apply during times shown on nearby signs',
-                'white_lines': 'Usually indicate parking bays or restrictions',
-                'dropped_kerb': 'Do not block driveways or dropped kerbs',
-                'bus_stops': 'No parking within 12 meters of bus stops',
-                'school_zones': 'Enhanced restrictions during school hours (8:00-9:30 AM, 2:30-4:00 PM)',
-                'loading_bays': 'Reserved for loading/unloading during specified hours',
-                'disabled_bays': 'Blue badge holders only, fines up to £1,000',
-                'ev_charging_bays': 'Reserved for electric vehicles during charging'
-            },
-            'pricing': {
-                'london_zones': {
-                    'zone_1': '£4.90-£8.00/hour',
-                    'zone_2': '£2.40-£4.90/hour',
-                    'outer_london': '£1.20-£2.40/hour'
-                },
-                'major_cities': {
-                    'manchester': '£1.50-£3.50/hour',
-                    'birmingham': '£1.20-£3.00/hour',
-                    'leeds': '£1.00-£2.50/hour',
-                    'liverpool': '£1.20-£2.80/hour',
-                    'bristol': '£1.50-£3.20/hour',
-                    'sheffield': '£1.00-£2.20/hour',
-                    'glasgow': '£1.20-£2.50/hour',
-                    'edinburgh': '£1.80-£3.50/hour'
-                },
-                'towns': '£0.50-£2.00/hour',
-                'retail_parks': '£1.00-£3.00/hour (often first 2-3 hours free)',
-                'hospitals': '£2.00-£5.00/hour',
-                'airports': '£3.00-£25.00/day',
-                'train_stations': '£2.00-£15.00/day'
-            },
-            'time_restrictions': {
-                'pay_and_display': 'Usually 8:00 AM - 6:00 PM Mon-Sat',
-                'resident_permits': '24/7 in residential permit zones',
-                'sunday_restrictions': 'Limited restrictions, varies by council',
-                'evening_restrictions': 'Most restrictions end 6:00-8:00 PM',
-                'overnight': 'Check for overnight restrictions in city centres'
+            'general': [
+                "Always check parking signs - they're legally binding",
+                "Single yellow lines mean no parking during specified times",
+                "Double yellow lines mean no parking at any time",
+                "Blue badge holders have special parking privileges",
+                "Most councils offer free parking after 6pm and on Sundays"
+            ],
+            'costs': {
+                'city_centre': "£2-5 per hour in most UK city centres",
+                'residential': "£1-3 per hour in residential permit areas",
+                'retail_parks': "Usually free for 2-3 hours at shopping centres",
+                'train_stations': "£3-8 per day at most UK train stations"
             }
         }
-        
-        # Enhanced intent patterns for better interactivity
+
+        # Intent patterns
         self.intent_patterns = {
             'greeting': [
-                r'\b(hi|hello|hey|greetings?|good\s+(morning|afternoon|evening)|howdy)\b',
-                r'^(hey there|what\'s up|sup)\b'
+                r'\b(hi|hello|hey|alright|cheers|hiya)\b',
+                r'^(hey\s+there|what\'s\s+up|how\s+do)\b'
             ],
             'parking_query': [
-                r'\b(park|parking|spot|garage|lot|space|car\s*park|place\s*to\s*park)\b',
-                r'\b(can\s+i\s+park|where\s+to\s+park|need\s+parking|looking\s+for\s+parking|find\s+parking)\b',
-                r'\b(find\s+me\s+a\s+spot|park\s+my\s+car|parking\s+near)\b',
-                r'\b(street\s+parking|on\s+street|off\s+street|ev\s+charging|disabled\s+parking)\b'
-            ],
-            'rules_query': [
-                r'\b(rules|restrictions|regulations|allowed|legal|fine|ticket|permit|resident|disabled|ev\s+charging)\b',
-                r'\b(can\s+i\s+park\s+here|is\s+it\s+legal|yellow\s+lines|double\s+yellow|single\s+yellow)\b',
-                r'\b(parking\s+zone|controlled\s+parking|pay\s+and\s+display)\b'
-            ],
-            'pricing_query': [
-                r'\b(cost|price|fee|charge|expensive|cheap|free|how\s+much)\b',
-                r'\b(what\s+does\s+it\s+cost|pricing|pay\s+to\s+park)\b'
+                r'\b(park|parking|spot|car\s+park|bay|space|ev|electric|accessible|disabled|permit)\b',
+                r'\b(can\s+i\s+park|where\s+to\s+park|need\s+parking|looking\s+for\s+parking)\b'
             ],
             'time_query': [
-                r'\b(\d{1,2}(?::\d{2})?\s*(am|pm)|at\s+\d|tonight|morning|afternoon|evening|now|later|tomorrow|today)\b',
-                r'\b(for\s+\d+\s+(hours?|minutes?)|overnight|all\s+day)\b'
+                r'\b(\d{1,2}(?::\d{2})?\s*(?:am|pm)|now|today|tomorrow|morning|afternoon|evening)\b',
+                r'\b(for\s+\d+\s+(hours?|hrs?|minutes?|mins)|overnight|all\s+day)\b'
             ],
             'location_query': [
-                r'\b(in|at|near|around|close\s+to)\s+[\w\s]+',
-                r'\b[\w\s]+(?:street|st|avenue|ave|road|rd|city|town|center|centre|mall|airport|station|postcode)\b',
-                r'\b[A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2}\b'
+                r'\b(?:in|at|near|around|by)\s+([A-Z][a-zA-Z\s]+?)(?:\s+(?:street|st|road|rd|lane|avenue|ave|city|town|centre|center))\b',
+                r'\b([A-Z][a-zA-Z\s]{2,})\b(?=\s+(?:at|for|around|by|\d|$))'
             ],
-            'specific_feature_query': [
-                r'\b(ev\s+charging|electric\s+vehicle|disabled\s+parking|accessible\s+parking|park\s+and\s+ride)\b',
-                r'\b(free\s+parking|cheap\s+parking|secure\s+parking)\b'
+            'preference_query': [
+                r'\b(free|cheap|covered|garage|ev|electric|charging|accessible|disabled|long\s+term|overnight)\b'
             ]
         }
-        
+
         # Personality responses
         self.personality_responses = {
             'greeting': [
-                "Hello! 🇬🇧 I'm your UK parking assistant! Where in the UK are you looking to park today?",
-                "Hi there! 🚗 I specialize in finding parking across the UK. Tell me your location or needs!",
-                "Welcome! I'm here to guide you through UK parking spots, rules, and prices. What's up?"
+                "Alright! 👋 I'm your parking mate, powered by HERE.com. Where do you need a spot?",
+                "Hello! 🚗 Ready to find you a cracking parking spot. What's up?"
             ],
-            'non_uk_location': [
-                "I focus on UK parking only! 🇬🇧 For international locations, please use Parksy's search bar.",
-                "Sorry, I'm a UK parking expert! For non-UK locations, try Parksy's main search feature.",
-                "I'm tailored for UK parking! Please use Parksy's location search for international spots."
+            'no_data': [
+                "No specific data from HERE.com, but I've got UK parking tips for you! 😊",
+                "HERE.com's a bit quiet here, but I'm loaded with parking advice! 🚗"
             ],
-            'unrecognized_location': [
-                "I couldn't pinpoint that exact spot, but I can still help you park nearby! 🚗",
-                "That location's a bit tricky to find, but let’s find you a great parking option! 🅿️",
-                "No exact match for that spot, but I’ve got you covered with nearby parking! 🇬🇧"
+            'success': [
+                "Brilliant! 🎉 Found some great parking spots for you!",
+                "Sorted! 🚗 Here's what HERE.com found for you!"
             ]
         }
 
-    def safe_api_request(self, url: str, params: Dict, timeout: int = None) -> Optional[Dict]:
-        """Make a safe API request with error handling and retries"""
-        if not self.api_available:
-            logger.info("API not available, using demo mode")
-            return None
-            
-        timeout = timeout or self.timeout
-        
-        for attempt in range(self.max_retries + 1):
-            try:
-                logger.info(f"Making API request to {url} (attempt {attempt + 1})")
-                response = requests.get(url, params=params, timeout=timeout)
-                response.raise_for_status()
-                return response.json()
-                
-            except requests.exceptions.Timeout:
-                logger.warning(f"Request timeout on attempt {attempt + 1}")
-                if attempt == self.max_retries:
-                    logger.error("All retry attempts failed due to timeout")
-                    return None
-                    
-            except requests.exceptions.ConnectionError:
-                logger.warning(f"Connection error on attempt {attempt + 1}")
-                if attempt == self.max_retries:
-                    logger.error("All retry attempts failed due to connection error")
-                    return None
-                    
-            except requests.exceptions.HTTPError as e:
-                logger.error(f"HTTP error: {e}")
-                return None
-                
-            except Exception as e:
-                logger.error(f"Unexpected error in API request: {e}")
-                return None
-                
-        return None
+    def extract_location_from_prompt(self, user_input: str, user_id: str = 'default') -> Dict:
+        """Extract location, time, and preferences from user input"""
+        if user_id not in self.user_contexts:
+            self.user_contexts[user_id] = ParkingContext()
 
-    def is_uk_location(self, location: str) -> bool:
-        """Check if location is in the UK using patterns and geocoding"""
-        location_lower = location.lower()
-        
-        # Check for obvious UK indicators
-        uk_indicators = [
-            'uk', 'england', 'scotland', 'wales', 'northern ireland', 'britain',
-            'london', 'birmingham', 'manchester', 'leeds', 'liverpool', 'bristol',
-            'sheffield', 'glasgow', 'edinburgh', 'cardiff', 'belfast', 'newcastle',
-            'nottingham', 'bradford', 'coventry', 'leicester', 'oxford', 'cambridge'
-        ]
-        
-        if any(indicator in location_lower for indicator in uk_indicators):
-            return True
-        
-        # Check postcode pattern
-        if re.search(r'\b[A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2}\b', location.upper()):
-            return True
-        
-        # Check for street-level UK patterns
-        street_indicators = ['street', 'st', 'avenue', 'ave', 'road', 'rd', 'lane', 'close', 'square', 'place']
-        if any(indicator in location_lower for indicator in street_indicators):
-            return True
-        
-        # If API is available, try geocoding
-        if self.api_available:
-            lat, lng, _ = self.geocode_location(location)
-            if lat and lng:
-                return (self.uk_bounds['south'] <= lat <= self.uk_bounds['north'] and 
-                        self.uk_bounds['west'] <= lng <= self.uk_bounds['east'])
-        
-        # Default assumption for common UK terms
-        return any(term in location_lower for term in ['high street', 'city centre', 'town centre'])
+        context = self.user_contexts[user_id]
+        user_input = user_input.strip().lower()
 
-    def get_here_parking_data(self, lat: float, lng: float, radius: float = 1000) -> List[Dict]:
-        """Get detailed parking data from HERE.com API or demo data"""
-        if not self.api_available:
-            logger.info("Using demo parking data")
-            demo_data = []
-            for spot in self.demo_parking_spots:
-                spot_copy = spot.copy()
-                spot_copy['position'] = {'lat': lat + random.uniform(-0.01, 0.01), 'lng': lng + random.uniform(-0.01, 0.01)}
-                demo_data.append(spot_copy)
-            return demo_data
-        
-        try:
-            # Search for various parking types using HERE Discover API
-            params = {
-                'at': f"{lat},{lng}",
-                'q': 'parking;ev charging;park and ride',
-                'limit': 50,
-                'apiKey': self.api_key,
-                'in': f"circle:{lat},{lng};r={radius}",
-                'categories': '700-7600-0116,700-7600-0117,700-7600-0118,700-7600-0322'  # Parking + EV charging
-            }
-            
-            data = self.safe_api_request(self.base_url, params)
-            if not data or not data.get('items'):
-                logger.warning("API request failed, using demo data")
-                return self.demo_parking_spots
-            
-            parking_spots = []
-            for item in data.get('items', []):
-                spot_data = self.extract_here_spot_data(item)
-                if spot_data:
-                    parking_spots.append(spot_data)
-            
-            # Sort by distance and include diverse parking types
-            parking_spots = sorted(parking_spots, key=lambda x: x.get('distance', float('inf')))
-            
-            # Ensure variety (on-street, off-street, EV, etc.)
-            variety_spots = []
-            types_seen = set()
-            for spot in parking_spots:
-                spot_type = spot.get('parking_type', 'unknown')
-                if spot_type not in types_seen or len(variety_spots) < 8:
-                    variety_spots.append(spot)
-                    types_seen.add(spot_type)
-            
-            return variety_spots if variety_spots else self.demo_parking_spots
-        except Exception as e:
-            logger.error(f"Error in get_here_parking_data: {e}")
-            return self.demo_parking_spots
-
-    def extract_here_spot_data(self, here_item: Dict) -> Dict:
-        """Extract and enhance data from HERE API response"""
-        try:
-            spot = {
-                'id': here_item.get('id', f'mock_{uuid.uuid4()}'),
-                'title': here_item.get('title', 'Unnamed Parking'),
-                'address': here_item.get('address', {}).get('label', 'Unknown Address'),
-                'distance': here_item.get('distance', 0),
-                'position': here_item.get('position', {'lat': 0, 'lng': 0}),
-                'categories': [cat.get('name', '') for cat in here_item.get('categories', [])],
-                'contacts': here_item.get('contacts', []),
-                'opening_hours': here_item.get('openingHours', []),
-                'access': here_item.get('access', []),
-                'parking_type': self.determine_parking_type(here_item),
-                'availability': here_item.get('availability', {'status': 'unknown', 'spaces': 0, 'last_updated': datetime.now().isoformat()}),
-                'accessibility_features': here_item.get('accessibility', ['Standard']),
-                'ev_charging': here_item.get('evCharging', {'available': False, 'charger_type': None, 'operating_hours': 'Unknown'})
-            }
-            
-            # Add UK-specific analysis
-            spot['uk_analysis'] = self.analyze_uk_parking_spot(spot)
-            spot['pricing_estimate'] = self.estimate_uk_pricing(spot)
-            spot['rules_applicable'] = self.get_applicable_uk_rules(spot)
-            
-            return spot
-        except Exception as e:
-            logger.error(f"Error extracting HERE data: {e}")
-            return None
-
-    def determine_parking_type(self, here_item: Dict) -> str:
-        """Determine parking type from HERE API data"""
-        title = here_item.get('title', '').lower()
-        categories = [cat.get('name', '').lower() for cat in here_item.get('categories', [])]
-        
-        if any('on-street' in cat for cat in categories) or 'street' in title:
-            return 'on-street'
-        elif any('parking' in cat for cat in categories) or any(term in title for term in ['car park', 'garage', 'lot']):
-            return 'off-street'
-        elif any('ev charging' in cat for cat in categories) or 'ev' in title:
-            return 'ev-charging'
-        elif any('park and ride' in cat for cat in categories) or 'park and ride' in title:
-            return 'park-and-ride'
-        return 'unknown'
-
-    def analyze_uk_parking_spot(self, spot: Dict) -> Dict:
-        """Analyze parking spot with UK-specific context"""
-        title = spot.get('title', '').lower()
-        address = spot.get('address', '').lower()
-        categories = [cat.lower() for cat in spot.get('categories', [])]
-        parking_type = spot.get('parking_type', 'unknown')
-        
-        analysis = {
-            'type': parking_type.title(),
-            'likely_restrictions': [],
-            'recommended_for': [],
-            'accessibility': 'Standard',
-            'payment_methods': ['Card', 'Coins', 'App likely available']
-        }
-        
-        # Determine parking type specifics
-        if parking_type == 'on-street':
-            analysis['type'] = 'On-Street Parking'
-            analysis['likely_restrictions'] = ['Pay and Display', 'Time limits (1-4 hours)', 'Resident permits may apply']
-            analysis['recommended_for'] = ['Short stays', 'Quick visits']
-            analysis['payment_methods'] = ['Coins', 'App', 'Pay by Phone']
-        elif parking_type == 'off-street':
-            if 'multi' in title or 'multi-storey' in title:
-                analysis['type'] = 'Multi-storey Car Park'
-                analysis['recommended_for'] = ['Weather protection', 'Security', 'Long stays']
-            elif 'surface' in title or 'ground' in title:
-                analysis['type'] = 'Surface Car Park'
-                analysis['recommended_for'] = ['Easy access', 'Short stays', 'Large vehicles']
-            else:
-                analysis['type'] = 'Off-Street Car Park'
-                analysis['recommended_for'] = ['Convenient access', 'Varied stay durations']
-        elif parking_type == 'ev-charging':
-            analysis['type'] = 'EV Charging Station'
-            analysis['likely_restrictions'] = ['EV vehicles only', 'Time limits during charging']
-            analysis['recommended_for'] = ['Electric vehicles', 'Eco-friendly travel']
-            analysis['payment_methods'].append('EV charging app')
-        elif parking_type == 'park-and-ride':
-            analysis['type'] = 'Park and Ride'
-            analysis['recommended_for'] = ['City centre access', 'Cost-effective long stays']
-            analysis['likely_restrictions'] = ['Specific bus service hours']
-        
-        # Location-based analysis
-        if any(area in address for area in ['london', 'central', 'city centre', 'town centre']):
-            analysis['likely_restrictions'].extend(['Higher charges', 'Time limits', 'Congestion charge area'])
-            analysis['payment_methods'].append('Contactless preferred')
-        
-        if 'hospital' in title or 'nhs' in title:
-            analysis['type'] = 'Hospital Car Park'
-            analysis['likely_restrictions'] = ['Higher charges', 'Patient/visitor validation available']
-            analysis['recommended_for'] = ['Hospital visits', 'Disabled parking available']
-        
-        if any(retail in title for retail in ['shopping', 'retail', 'centre', 'mall']):
-            analysis['type'] = 'Retail Car Park'
-            analysis['recommended_for'] = ['Shopping trips', 'Often first hours free']
-            analysis['likely_restrictions'] = ['Maximum stay limits', 'Customer parking only']
-        
-        return analysis
-
-    def estimate_uk_pricing(self, spot: Dict) -> Dict:
-        """Estimate pricing based on UK location and type"""
-        title = spot.get('title', '').lower()
-        address = spot.get('address', '').lower()
-        parking_type = spot.get('parking_type', 'unknown')
-        
-        pricing = {
-            'estimated_hourly': '£1.50-£3.00',
-            'estimated_daily': '£8.00-£15.00',
-            'confidence': 'Medium',
-            'notes': []
-        }
-        
-        # Adjust pricing based on parking type
-        if parking_type == 'on-street':
-            pricing['estimated_hourly'] = '£1.00-£2.50'
-            pricing['estimated_daily'] = 'Not applicable'
-            pricing['notes'].append('Pay and Display rates apply')
-        elif parking_type == 'ev-charging':
-            pricing['estimated_hourly'] = '£2.00-£4.00 + charging fee'
-            pricing['notes'].append('Additional EV charging costs may apply')
-        elif parking_type == 'park-and-ride':
-            pricing['estimated_daily'] = '£5.00-£10.00'
-            pricing['notes'].append('Includes bus fare in some schemes')
-        
-        # Location-based pricing
-        if 'london' in address:
-            if any(central in address for central in ['central', 'zone 1', 'city', 'westminster']):
-                pricing['estimated_hourly'] = '£4.90-£8.00'
-                pricing['estimated_daily'] = '£30.00-£50.00'
-                pricing['notes'].append('Central London premium rates')
-            else:
-                pricing['estimated_hourly'] = '£2.40-£4.90'
-                pricing['estimated_daily'] = '£15.00-£30.00'
-                pricing['notes'].append('Outer London rates')
-        elif any(city in address for city in ['manchester', 'birmingham', 'leeds', 'liverpool']):
-            pricing['estimated_hourly'] = '£1.50-£3.50'
-            pricing['estimated_daily'] = '£8.00-£20.00'
-            pricing['notes'].append('Major city rates')
-        
-        # Specific venue types
-        if 'hospital' in title:
-            pricing['estimated_hourly'] = '£2.00-£5.00'
-            pricing['notes'].append('Hospital parking - may have reduced rates for patients')
-        if any(retail in title for retail in ['shopping', 'retail', 'supermarket']):
-            pricing['notes'].append('Often first 2-3 hours free for customers')
-        if 'airport' in title:
-            pricing['estimated_hourly'] = '£3.00-£8.00'
-            pricing['estimated_daily'] = '£15.00-£25.00'
-            pricing['notes'].append('Airport rates - long stay options available')
-        
-        return pricing
-
-    def get_applicable_uk_rules(self, spot: Dict) -> List[str]:
-        """Get applicable UK parking rules for the location"""
-        rules = []
-        parking_type = spot.get('parking_type', 'unknown')
-        
-        # General UK rules
-        rules.extend([
-            "Blue badge holders may have special provisions",
-            "Check signs for specific time restrictions",
-            "Payment usually required during posted hours",
-            "Maximum stay limits may apply"
-        ])
-        
-        title = spot.get('title', '').lower()
-        address = spot.get('address', '').lower()
-        
-        # Type-specific rules
-        if parking_type == 'on-street':
-            rules.extend([
-                "Pay and Display typically 8am-6pm",
-                "Single/double yellow lines may restrict parking",
-                "Resident permit zones may apply"
-            ])
-        elif parking_type == 'off-street':
-            rules.extend([
-                "Check operating hours for access",
-                "Payment may be required at entry/exit"
-            ])
-        elif parking_type == 'ev-charging':
-            rules.extend([
-                "For electric vehicles only",
-                "Time limits during charging sessions",
-                "Check charger compatibility"
-            ])
-        elif parking_type == 'park-and-ride':
-            rules.extend([
-                "Valid for specific bus services",
-                "Check bus operating hours"
-            ])
-        
-        # Location-specific rules
-        if 'london' in address:
-            rules.extend([
-                "Congestion Charge may apply (Mon-Fri 7am-6pm)",
-                "ULEZ charges apply for non-compliant vehicles",
-                "Resident permit zones common"
-            ])
-        if any(term in title for term in ['hospital', 'nhs']):
-            rules.extend([
-                "Patient/visitor validation may reduce charges",
-                "Emergency vehicle access must be maintained",
-                "Disabled parking bays strictly enforced"
-            ])
-        if any(term in title for term in ['shopping', 'retail']):
-            rules.extend([
-                "Customer parking only - terms may apply",
-                "Time limits often enforced",
-                "Free periods may require minimum spend"
-            ])
-        
-        return rules
-
-    def extract_entities(self, message: str) -> Dict:
-        """Extract entities from user message with enhanced UK focus"""
-        entities = {
-            'location': None,
-            'time': None,
-            'duration': None,
-            'vehicle_type': None,
-            'budget': None,
-            'preferences': [],
-            'is_uk_location': False,
-            'street_level': False
-        }
-        
-        message_lower = message.lower()
-        
-        # Enhanced location extraction
-        location_patterns = [
-            r'\b(?:in|at|near|around|close\s+to)\s+([A-Z][a-zA-Z\s]+?)(?:\s+(?:at|for|around|by)|\s*[,.]|$)',
-            r'\b([A-Z][a-zA-Z\s]+(?:street|st|avenue|ave|road|rd|lane|close|square|place|city|town|centre|center|mall|airport|station))\b',
-            r'\b([A-Z]{1,2}\d{1,2}\s*\d[A-Z]{2})\b',  # UK postcodes
-            r'\b([A-Z][a-zA-Z\s]{2,})\b(?=\s+(?:at|for|around|\d|$))'
-        ]
-        
-        for pattern in location_patterns:
-            match = re.search(pattern, message, re.IGNORECASE)
+        # Extract location
+        location = None
+        for pattern in self.intent_patterns['location_query']:
+            match = re.search(pattern, user_input, re.IGNORECASE)
             if match:
                 location = match.group(1).strip()
-                entities['location'] = location
-                entities['is_uk_location'] = self.is_uk_location(location)
-                # Check if street-level
-                street_indicators = ['street', 'st', 'avenue', 'ave', 'road', 'rd', 'lane', 'close', 'square', 'place']
-                entities['street_level'] = any(ind in location.lower() for ind in street_indicators)
                 break
-        
+        if not location:
+            location = user_input
+
         # Extract time
-        time_patterns = [
-            r'\b(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b',
-            r'\b(at\s+\d{1,2}(?::\d{2})?)\b',
-            r'\b(tonight|this\s+morning|this\s+afternoon|this\s+evening|now|later|tomorrow|today)\b'
-        ]
-        
-        for pattern in time_patterns:
-            match = re.search(pattern, message_lower)
+        time_context = context.time_context or 'now'
+        for pattern in self.intent_patterns['time_query']:
+            match = re.search(pattern, user_input, re.IGNORECASE)
             if match:
-                entities['time'] = match.group(1).strip()
+                time_context = match.group(0).strip()
                 break
-        
+
         # Extract duration
-        duration_patterns = [
-            r'\b(for\s+\d+\s+(?:hours?|hrs?|minutes?|mins?))\b',
-            r'\b(overnight|all\s+day|quick\s+stop)\b'
-        ]
-        
-        for pattern in duration_patterns:
-            match = re.search(pattern, message_lower)
-            if match:
-                entities['duration'] = match.group(1).strip()
-                break
-        
-        # Extract vehicle type
-        if 'electric' in message_lower or 'ev' in message_lower:
-            entities['vehicle_type'] = 'electric'
-        elif 'disabled' in message_lower or 'accessible' in message_lower:
-            entities['vehicle_type'] = 'disabled'
-        
+        duration_match = re.search(r'(\d+)\s*(?:hour|hr|h)s?', user_input, re.IGNORECASE)
+        duration = int(duration_match.group(1)) if duration_match else context.duration
+
         # Extract preferences
-        if 'free' in message_lower:
-            entities['preferences'].append('free_parking')
-        if 'cheap' in message_lower:
-            entities['preferences'].append('low_cost')
-        if 'secure' in message_lower:
-            entities['preferences'].append('secure')
-        if 'ev' in message_lower or 'charging' in message_lower:
-            entities['preferences'].append('ev_charging')
-        if 'disabled' in message_lower or 'accessible' in message_lower:
-            entities['preferences'].append('accessible')
-        
-        return entities
+        parking_prefs = {
+            'free': bool(re.search(r'\b(?:free|no\s+cost|cheap)\b', user_input, re.IGNORECASE)),
+            'covered': bool(re.search(r'\b(?:covered|garage|indoor)\b', user_input, re.IGNORECASE)),
+            'ev_charging': bool(re.search(r'\b(?:ev|electric|charging)\b', user_input, re.IGNORECASE)),
+            'accessible': bool(re.search(r'\b(?:accessible|disabled|blue\s+badge)\b', user_input, re.IGNORECASE)),
+            'long_term': bool(re.search(r'\b(?:all\s+day|long\s+term|overnight)\b', user_input, re.IGNORECASE))
+        }
+
+        # Update context
+        context.location = location
+        context.time_context = time_context
+        context.duration = duration
+        context.preferences = parking_prefs
+
+        return {
+            'location': location,
+            'time_context': time_context,
+            'duration': duration,
+            'preferences': parking_prefs,
+            'original_input': user_input
+        }
 
     def understand_intent(self, message: str) -> Tuple[str, float]:
-        """Enhanced intent detection with UK parking focus"""
+        """Detect user intent"""
         message_lower = message.lower().strip()
         intent_scores = {}
-        
-        # Score each intent
+
         for intent, patterns in self.intent_patterns.items():
             score = 0
             for pattern in patterns:
                 matches = len(re.findall(pattern, message_lower))
                 score += matches * 10
-            
-            # Boost specific UK parking intents
-            if intent == 'rules_query' and any(term in message_lower for term in ['yellow lines', 'restrictions', 'legal', 'fine', 'permit']):
-                score += 20
-            if intent == 'pricing_query' and any(term in message_lower for term in ['cost', 'price', 'expensive', 'cheap', 'free']):
-                score += 20
-            if intent == 'parking_query' and any(term in message_lower for term in ['on-street', 'off-street', 'ev charging', 'park and ride']):
-                score += 15
-            if intent == 'specific_feature_query' and any(term in message_lower for term in ['ev charging', 'disabled', 'accessible', 'park and ride']):
-                score += 20
-                
             intent_scores[intent] = score
-        
+
         if not intent_scores or max(intent_scores.values()) == 0:
             return 'general', 0.5
-        
+
         primary_intent = max(intent_scores, key=intent_scores.get)
         confidence = min(intent_scores[primary_intent] / 100, 1.0)
-        
         return primary_intent, confidence
 
-    def generate_contextual_response(self, message: str, user_id: str = 'default') -> Dict:
-        """Generate intelligent, UK-focused responses"""
+    def geocode_location(self, location_query: str) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+        """Geocode location with UK bias"""
+        enhanced_query = f"{location_query} UK" if not any(country in location_query.lower() for country in ['uk', 'united kingdom']) else location_query
+
+        params = {
+            'q': enhanced_query,
+            'apiKey': self.api_key,
+            'limit': 3,
+            'in': 'countryCode:GBR'
+        }
+
         try:
-            if user_id not in self.user_contexts:
-                self.user_contexts[user_id] = ParkingContext()
-            
-            context = self.user_contexts[user_id]
-            entities = self.extract_entities(message)
-            intent, confidence = self.understand_intent(message)
-            
-            # Check for non-UK location early
-            if entities['location'] and not entities['is_uk_location']:
-                return self.handle_non_uk_location(entities['location'])
-            
-            # Update context
-            if entities['location'] and entities['is_uk_location']:
-                context.location = entities['location']
-            if entities['time']:
-                context.time = entities['time']
-            if entities['duration']:
-                context.duration = entities['duration']
-            if entities['vehicle_type']:
-                context.vehicle_type = entities['vehicle_type']
-            if entities['budget']:
-                context.budget = entities['budget']
-            if entities['preferences']:
-                context.preferences = entities['preferences']
-            
-            # Handle intents
-            if intent == 'greeting':
-                return self.handle_greeting(message, context)
-            elif intent == 'rules_query':
-                return self.handle_rules_query(message, context, entities)
-            elif intent == 'pricing_query':
-                return self.handle_pricing_query(message, context, entities)
-            elif intent == 'parking_query' or intent == 'specific_feature_query' or (entities['location'] and entities['is_uk_location']):
-                return self.handle_uk_parking_query(message, context, entities)
-            else:
-                return self.handle_general_conversation(message, context, entities)
-                
+            response = requests.get(self.geocoding_url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get('items'):
+                result = data['items'][0]
+                position = result['position']
+                address = result.get('address', {}).get('label', location_query)
+                return position['lat'], position['lng'], address
+            return None, None, None
         except Exception as e:
-            logger.error(f"Error in generate_contextual_response: {e}")
-            return {
-                'message': "I'm having a small technical hiccup! 🔧",
-                'response': "Don't worry - I'm still here to help with your UK parking needs. Please try again!",
-                'suggestions': [
-                    "Try asking about parking in a UK city",
-                    "Ask about UK parking rules",
-                    "Ask about parking prices"
-                ],
-                'type': 'error_recovery',
-                'status': 'partial'
+            print(f"Geocoding error: {e}")
+            return None, None, None
+
+    def search_comprehensive_parking(self, lat: float, lng: float, preferences: Dict) -> List[Dict]:
+        """Search for parking using HERE API"""
+        search_categories = ['parking', 'parking-garage', 'parking-lot', 'park-and-ride', 'ev-charging-station']
+        all_parking = []
+        seen_locations = set()
+
+        for category in search_categories:
+            params = {
+                'at': f"{lat},{lng}",
+                'q': category,
+                'limit': 10,
+                'apiKey': self.api_key
             }
 
-    def handle_non_uk_location(self, location: str) -> Dict:
-        """Handle requests for non-UK locations"""
-        return {
-            'message': f"I specialize in UK parking only! 🇬🇧",
-            'response': f"For parking information in {location}, please use the Parksy location search bar at the top of the page. I'm here to help with all your UK parking needs!",
-            'suggestions': [
-                "Ask about UK parking locations",
-                "Try: 'parking in London'",
-                "Try: 'parking rules in Manchester'"
-            ],
-            'type': 'non_uk_redirect',
-            'status': 'redirect'
-        }
+            try:
+                response = requests.get(self.discover_url, params=params, timeout=8)
+                response.raise_for_status()
+                data = response.json()
+                for item in data.get('items', []):
+                    location_key = (item.get('title', ''), item.get('position', {}).get('lat', 0))
+                    if location_key not in seen_locations:
+                        seen_locations.add(location_key)
+                        item['search_category'] = category
+                        all_parking.append(item)
+            except Exception as e:
+                print(f"Search error for {category}: {e}")
 
-    def handle_unrecognized_location(self, location: str, context: ParkingContext) -> Dict:
-        """Handle unrecognized street or location with professional response and mock data"""
-        # Use mock data with adjusted coordinates
-        lat, lng = 51.5074, -0.1278  # Default to central London
+        return all_parking
+
+    def generate_mock_parking_data(self, location: str, preferences: Dict) -> List[Dict]:
+        """Generate mock parking data for locations not found"""
         mock_spots = []
-        for spot in self.demo_parking_spots:
-            spot_copy = spot.copy()
-            spot_copy['address'] = f"{location}, Near {spot['address']}"
-            spot_copy['position'] = {'lat': lat + random.uniform(-0.005, 0.005), 'lng': lng + random.uniform(-0.005, 0.005)}
-            mock_spots.append(spot_copy)
-        
-        return {
-            'message': random.choice(self.personality_responses['unrecognized_location']),
-            'response': f"While I couldn't find exact parking data for {location}, you can likely park in this area. Here are some nearby options with UK-specific details:",
-            'data': {
-                'location': location,
-                'coordinates': {'lat': lat, 'lng': lng},
-                'search_context': {
-                    'time': context.time,
-                    'duration': context.duration,
-                    'vehicle': context.vehicle_type,
-                    'budget': context.budget
-                },
-                'parking_spots': mock_spots[:8],
-                'location_rules': self.get_location_specific_rules(location),
-                'pricing_guide': self.get_location_pricing(location),
-                'notes': [
-                    "This area likely has on-street parking with Pay and Display",
-                    "Check nearby signs for specific restrictions",
-                    "Off-street car parks are often available in town centres",
-                    "Consider mobile apps like PayByPhone for convenience"
-                ]
+        num_spots = random.randint(5, 8)
+        street_names = [
+            f"{location} High Street", f"{location} Main Road", f"{location} Central Avenue",
+            f"{location} Market Street", f"{location} Church Lane", f"{location} Station Road"
+        ]
+
+        parking_types = [
+            {
+                'type': 'On-Street Metered Parking',
+                'hourly_rate': random.uniform(1.5, 4.0),
+                'max_duration': random.choice([2, 3, 4]),
+                'free_periods': ['Sundays', 'After 6 PM'],
+                'features': ['Pay by phone', 'Coin payment', 'Card payment']
             },
-            'suggestions': [
-                f"Find more parking options near {location}",
-                "Ask about specific parking rules",
-                "Check pricing details"
-            ],
-            'type': 'unrecognized_location',
-            'status': 'success'
+            {
+                'type': 'Municipal Car Park',
+                'hourly_rate': random.uniform(2.0, 3.5),
+                'max_duration': 10,
+                'free_periods': ['First hour free on weekends'],
+                'features': ['24/7 access', 'CCTV security', 'Well-lit']
+            },
+            {
+                'type': 'Shopping Center Parking',
+                'hourly_rate': 0.0,
+                'max_duration': 4,
+                'free_periods': ['Free for customers'],
+                'features': ['Covered parking', 'Trolley bays', 'Easy access']
+            }
+        ]
+
+        for i in range(num_spots):
+            parking_type = random.choice(parking_types)
+            distance = random.randint(50, 800)
+
+            spot = {
+                'title': f"{parking_type['type']} - {random.choice(street_names)}",
+                'distance': distance,
+                'position': {'lat': 51.5074, 'lng': -0.1278},
+                'address': {'label': f"{random.choice(street_names)}, {location}"},
+                'categories': [{'name': 'parking'}],
+                'is_mock': True,
+                'parking_details': {
+                    'type': parking_type['type'],
+                    'hourly_rate': parking_type['hourly_rate'],
+                    'daily_rate': parking_type['hourly_rate'] * 8 if parking_type['hourly_rate'] > 0 else 0,
+                    'max_duration': parking_type['max_duration'],
+                    'free_periods': parking_type['free_periods'],
+                    'features': parking_type['features'],
+                    'availability': random.choice(['High', 'Medium', 'Low']),
+                    'accessibility': random.choice([True, False]),
+                    'ev_charging': preferences.get('ev_charging', False) and random.choice([True, False])
+                }
+            }
+            mock_spots.append(spot)
+
+        return mock_spots
+
+    def calculate_enhanced_ai_score(self, parking_spot: Dict, preferences: Dict, time_context: str) -> int:
+        """Score parking spots based on preferences and time"""
+        score = 50
+        distance = parking_spot.get('distance', 500)
+
+        if distance < 100:
+            score += 25
+        elif distance < 200:
+            score += 20
+        elif distance < 400:
+            score += 15
+
+        current_hour = datetime.now().hour
+        if time_context == 'morning' and 6 <= current_hour <= 10:
+            score += 10
+        elif time_context == 'afternoon' and 11 <= current_hour <= 17:
+            score += 5
+        elif time_context == 'evening' and 17 <= current_hour <= 22:
+            score += 8
+
+        if parking_spot.get('is_mock'):
+            details = parking_spot.get('parking_details', {})
+            if preferences.get('free') and details.get('hourly_rate', 0) == 0:
+                score += 20
+            if preferences.get('covered') and 'Covered' in str(details.get('features', [])):
+                score += 15
+            if preferences.get('ev_charging') and details.get('ev_charging'):
+                score += 20
+            if preferences.get('accessible') and details.get('accessibility'):
+                score += 15
+
+        title = parking_spot.get('title', '').lower()
+        if 'garage' in title or 'covered' in title:
+            score += 10
+        if 'free' in title:
+            score += 15
+        if 'ev' in title or 'charging' in title:
+            score += 10 if preferences.get('ev_charging') else 5
+
+        return max(0, min(100, score + random.randint(-3, 3)))
+
+    def get_comprehensive_parking_info(self, parking_spot: Dict) -> Dict:
+        """Get detailed parking information"""
+        if parking_spot.get('is_mock'):
+            return self.format_mock_parking_info(parking_spot)
+
+        title = parking_spot.get('title', '').lower()
+        categories = parking_spot.get('categories', [])
+        parking_type = self.determine_here_parking_type(title, categories)
+        pricing = self.generate_realistic_pricing(parking_type)
+
+        return {
+            'can_park': True,
+            'type': parking_type['name'],
+            'rules_summary': parking_type['rules_summary'],
+            'detailed_rules': parking_type['detailed_rules'],
+            'cost': pricing['cost_description'],
+            'hourly_rate': pricing['hourly_rate'],
+            'daily_rate': pricing['daily_rate'],
+            'time_limit': parking_type['time_limit'],
+            'features': parking_type['features'],
+            'availability': random.choice(['High', 'Medium', 'Low']),
+            'payment_methods': pricing['payment_methods'],
+            'accessibility': random.choice([True, False]),
+            'ev_charging': 'ev' in title or 'charging' in title,
+            'operating_hours': parking_type['operating_hours'],
+            'pros': parking_type['pros'],
+            'cons': parking_type['cons'],
+            'uk_specific': self.get_uk_specific_info(title)
         }
 
-    def handle_rules_query(self, message: str, context: ParkingContext, entities: Dict) -> Dict:
-        """Handle UK parking rules queries"""
-        location = entities.get('location') or context.location
-        
-        if not location:
-            return {
-                'message': "Here are the key UK parking rules! 📋",
-                'response': "UK parking rules to remember:",
-                'data': {
-                    'general_rules': self.uk_parking_rules['general'],
-                    'time_restrictions': self.uk_parking_rules['time_restrictions'],
-                    'important_notes': [
-                        "Always check local signs for specific restrictions",
-                        "Rules vary by council - local authorities set their own policies",
-                        "Fines typically range from £25-£130 depending on location and violation"
-                    ]
-                },
-                'suggestions': [
-                    "Ask about specific location rules",
-                    "Ask about parking pricing",
-                    "Ask about disabled or EV parking"
+    def format_mock_parking_info(self, parking_spot: Dict) -> Dict:
+        """Format mock parking information"""
+        details = parking_spot.get('parking_details', {})
+        hourly_rate = details.get('hourly_rate', 0)
+        cost_desc = f"£{hourly_rate:.2f} per hour" if hourly_rate > 0 else "Free"
+        if details.get('daily_rate', 0) > 0:
+            cost_desc += f" / £{details['daily_rate']:.2f} daily max"
+
+        return {
+            'can_park': True,
+            'type': details.get('type', 'Public Parking'),
+            'rules_summary': f"Standard {details.get('type', 'parking')} with {details.get('max_duration', 'unlimited')} hour limit",
+            'detailed_rules': [
+                f"Maximum parking duration: {details.get('max_duration', 'unlimited')} hours",
+                "Payment required during operating hours" if hourly_rate > 0 else "Free parking available",
+                "Observe posted signage and restrictions"
+            ],
+            'cost': cost_desc,
+            'hourly_rate': hourly_rate,
+            'daily_rate': details.get('daily_rate', 0),
+            'time_limit': f"{details.get('max_duration', 'No')} hour limit",
+            'features': details.get('features', []),
+            'availability': details.get('availability', 'Medium'),
+            'payment_methods': ['Cash', 'Card', 'Mobile App'] if hourly_rate > 0 else ['Free'],
+            'accessibility': details.get('accessibility', False),
+            'ev_charging': details.get('ev_charging', False),
+            'operating_hours': '24/7' if 'garage' in details.get('type', '').lower() else '6:00 AM - 10:00 PM',
+            'pros': [
+                f"Good availability ({details.get('availability', 'Medium').lower()})",
+                f"Within {parking_spot.get('distance', 0)}m walking distance"
+            ],
+            'cons': [
+                f"£{hourly_rate:.2f}/hour cost" if hourly_rate > 0 else "Time limited parking",
+                f"{details.get('max_duration', 'No')} hour maximum stay"
+            ],
+            'uk_specific': self.get_uk_specific_info(details.get('type', '').lower())
+        }
+
+    def determine_here_parking_type(self, title: str, categories: List) -> Dict:
+        """Determine parking type from HERE data"""
+        parking_types = {
+            'street': {
+                'name': 'On-Street Parking',
+                'rules_summary': 'Metered street parking with time restrictions',
+                'detailed_rules': [
+                    'Pay at meter or via mobile app',
+                    'Observe posted time limits',
+                    'No parking during street cleaning hours',
+                    'Valid permit may be required in some zones'
                 ],
-                'type': 'parking_rules',
-                'status': 'success'
+                'time_limit': '2-4 hours maximum',
+                'features': ['Pay & Display', 'Mobile payment options'],
+                'operating_hours': '8:00 AM - 6:00 PM (Mon-Sat)',
+                'pros': ['Convenient street access', 'Usually available'],
+                'cons': ['Time restrictions', 'Weather exposed']
+            },
+            'garage': {
+                'name': 'Multi-Level Car Park',
+                'rules_summary': 'Secure covered parking with hourly rates',
+                'detailed_rules': [
+                    'Take ticket on entry, pay before exit',
+                    'Height restrictions apply (usually 2.1m)',
+                    'Keep ticket with you at all times'
+                ],
+                'time_limit': '24 hours maximum',
+                'features': ['Covered parking', 'Security cameras', 'Lifts available'],
+                'operating_hours': '24/7',
+                'pros': ['Weather protection', 'Secure environment'],
+                'cons': ['Higher cost', 'Height restrictions']
+            },
+            'lot': {
+                'name': 'Surface Car Park',
+                'rules_summary': 'Open-air parking lot with standard rates',
+                'detailed_rules': [
+                    'Pay at entry or exit barriers',
+                    'Display valid ticket on dashboard',
+                    'Maximum stay limits apply'
+                ],
+                'time_limit': '12 hours maximum',
+                'features': ['Easy access', 'Wide spaces', 'Good lighting'],
+                'operating_hours': '6:00 AM - 11:00 PM',
+                'pros': ['Lower cost than garages', 'Easy vehicle access'],
+                'cons': ['No weather protection', 'Limited security']
             }
-        else:
+        }
+
+        if any(word in title for word in ['garage', 'multi', 'level']):
+            return parking_types['garage']
+        elif any(word in title for word in ['lot', 'surface', 'ground']):
+            return parking_types['lot']
+        return parking_types['street']
+
+    def generate_realistic_pricing(self, parking_type: Dict) -> Dict:
+        """Generate realistic pricing"""
+        base_rates = {
+            'On-Street Parking': {'min': 1.50, 'max': 3.00},
+            'Multi-Level Car Park': {'min': 2.50, 'max': 5.00},
+            'Surface Car Park': {'min': 2.00, 'max': 4.00}
+        }
+
+        rate_range = base_rates.get(parking_type['name'], {'min': 2.00, 'max': 4.00})
+        hourly_rate = round(random.uniform(rate_range['min'], rate_range['max']), 2)
+        daily_rate = round(hourly_rate * random.uniform(6, 8), 2)
+
+        return {
+            'hourly_rate': hourly_rate,
+            'daily_rate': daily_rate,
+            'cost_description': f"£{hourly_rate:.2f} per hour / £{daily_rate:.2f} daily maximum",
+            'payment_methods': ['Card', 'Cash', 'Mobile App', 'Contactless']
+        }
+
+    def get_uk_specific_info(self, title: str) -> Dict:
+        """Get UK-specific parking info"""
+        uk_info = {
+            'blue_badge_friendly': False,
+            'payment_methods': ['Card', 'Contactless', 'RingGo'],
+            'typical_hours': '8am-6pm Mon-Sat',
+            'sunday_parking': 'Often free or reduced rates'
+        }
+
+        if 'street' in title:
+            uk_info['special_notes'] = [
+                'Check for resident permit zones',
+                'Single/double yellow lines enforced'
+            ]
+        if 'ev' in title or 'charging' in title:
+            uk_info['ev_charging'] = {'available': True, 'charger_types': ['Type 2', 'CCS']}
+        if 'accessible' in title or 'disabled' in title:
+            uk_info['blue_badge_friendly'] = True
+        return uk_info
+
+    def generate_contextual_response(self, message: str, user_id: str = 'default') -> Dict:
+        """Generate contextual response"""
+        intent, confidence = self.understand_intent(message)
+        parsed_input = self.extract_location_from_prompt(message, user_id)
+        context = self.user_contexts[user_id]
+
+        if intent == 'greeting':
             return {
-                'message': f"Here are the parking rules for {location}! 📍",
-                'response': f"Parking regulations in {location}:",
-                'data': {
-                    'location': location,
-                    'general_rules': self.uk_parking_rules['general'],
-                    'location_specific': self.get_location_specific_rules(location),
-                    'pricing_info': self.get_location_pricing(location)
-                },
+                'message': random.choice(self.personality_responses['greeting']),
+                'response': "Tell me where you want to park, and I'll find you the best spots using HERE.com!",
                 'suggestions': [
-                    f"Find parking spots in {location}",
-                    "Ask about payment methods",
-                    "Ask about EV or disabled parking"
+                    "Try: 'Find parking near Oxford Street'",
+                    "Or: 'EV parking in Manchester'"
                 ],
-                'type': 'location_rules',
+                'type': 'greeting',
                 'status': 'success'
             }
 
-    def handle_pricing_query(self, message: str, context: ParkingContext, entities: Dict) -> Dict:
-        """Handle UK parking pricing queries"""
-        location = entities.get('location') or context.location
-        
-        pricing_data = self.uk_parking_rules['pricing']
-        
-        if location:
-            location_pricing = self.get_location_pricing(location)
-            return {
-                'message': f"Here's the pricing information for {location}! 💷",
-                'response': f"Parking costs in {location}:",
-                'data': {
-                    'location': location,
-                    'pricing': location_pricing,
-                    'general_pricing': pricing_data,
-                    'money_saving_tips': [
-                        "Look for retail parks with free initial hours",
-                        "Consider park-and-ride schemes for city centres",
-                        "Check council websites for resident permits if staying longer",
-                        "Use parking apps for real-time pricing and availability"
-                    ]
-                },
-                'suggestions': [
-                    f"Find parking spots in {location}",
-                    "Ask about parking rules",
-                    "Ask about free or EV parking options"
-                ],
-                'type': 'pricing_info',
-                'status': 'success'
-            }
-        else:
-            return {
-                'message': "Here's UK parking pricing information! 💷",
-                'response': "Typical UK parking costs:",
-                'data': {
-                    'pricing': pricing_data,
-                    'notes': [
-                        "Prices vary significantly by location and time",
-                        "London has the highest rates in the UK",
-                        "Many retail locations offer free parking with purchase",
-                        "Early bird and evening rates often available"
-                    ]
-                },
-                'suggestions': [
-                    "Ask about specific city pricing",
-                    "Ask about free parking options",
-                    "Find parking in your area"
-                ],
-                'type': 'general_pricing',
-                'status': 'success'
-            }
-
-    def handle_uk_parking_query(self, message: str, context: ParkingContext, entities: Dict) -> Dict:
-        """Handle UK parking location queries with enhanced handling"""
-        location = entities.get('location') or context.location
-        
+        location = parsed_input['location']
         if not location:
             return {
-                'message': "I'd love to help you find UK parking! 🇬🇧",
-                'response': "I just need to know where in the UK you're looking to park. Could you tell me the location?",
-                'suggestions': [
-                    "Example: 'parking in London'",
-                    "Example: 'Birmingham city centre'",
-                    "Example: 'M1 2AB postcode'"
-                ],
+                'message': "I need a location to find parking!",
+                'response': "Please tell me where you want to park (e.g., 'Oxford Street, London').",
+                'suggestions': ["Example: 'near Manchester Piccadilly'"],
                 'type': 'location_needed',
                 'status': 'success'
             }
-        
-        # Geocode and search
-        lat, lng, formatted_address = self.geocode_location(location)
-        if not lat or entities['street_level']:
-            return self.handle_unrecognized_location(location, context)
-        
-        # Verify UK location
-        if not (self.uk_bounds['south'] <= lat <= self.uk_bounds['north'] and 
-                self.uk_bounds['west'] <= lng <= self.uk_bounds['east']):
-            return self.handle_non_uk_location(location)
-        
-        # Search for parking
-        parking_spots = self.get_here_parking_data(lat, lng)
-        
-        if parking_spots:
-            # Filter based on preferences
-            filtered_spots = self.filter_spots_by_preferences(parking_spots, entities['preferences'], entities['vehicle_type'])
-            
+
+        lat, lng, address = self.geocode_location(location)
+        if lat is None:
+            mock_spots = self.generate_mock_parking_data(location, parsed_input['preferences'])
+            scored_spots = [
+                {
+                    'title': spot['title'],
+                    'address': spot['address']['label'],
+                    'distance': f"{spot['distance']}m",
+                    'score': self.calculate_enhanced_ai_score(spot, parsed_input['preferences'], parsed_input['time_context']),
+                    'raw_data': spot
+                } for spot in mock_spots
+            ]
+            scored_spots.sort(key=lambda x: x['score'], reverse=True)
+            context.last_search = {'spots': scored_spots, 'is_mock': True}
+
             return {
-                'message': f"Excellent! 🎉 Found parking options in {formatted_address or location}",
-                'response': f"Here are {len(filtered_spots[:10])} parking options (including on-street, off-street, EV, and accessible spots):",
-                'data': {
-                    'location': formatted_address or location,
-                    'coordinates': {'lat': lat, 'lng': lng},
-                    'search_context': entities,
-                    'parking_spots': filtered_spots[:10],
-                    'location_rules': self.get_location_specific_rules(location),
-                    'pricing_guide': self.get_location_pricing(location),
-                    'nearby_locations': self.get_nearby_locations(lat, lng)
-                },
-                'suggestions': [
-                    "Ask about specific parking rules",
-                    "Ask about pricing details",
-                    "Need EV or disabled parking?"
-                ],
-                'type': 'uk_parking_results',
-                'status': 'success'
+                'message': random.choice(self.personality_responses['no_data']),
+                'response': f"Couldn't find {location} in HERE.com, but here's some parking advice!",
+                'data': {'parking_spots': scored_spots, 'is_mock': True},
+                'uk_parking_tip': random.choice(self.uk_parking_rules['general']),
+                'suggestions': ["Try a nearby city or landmark"],
+                'type': 'parking_advice',
+                'status': 'partial'
             }
-        else:
-            return self.handle_unrecognized_location(location, context)
 
-    def filter_spots_by_preferences(self, spots: List[Dict], preferences: List[str], vehicle_type: Optional[str]) -> List[Dict]:
-        """Filter parking spots based on user preferences and vehicle type"""
-        filtered_spots = []
-        
-        for spot in spots:
-            matches_preferences = True
-            if preferences:
-                if 'free_parking' in preferences and 'free' not in spot.get('pricing_estimate', {}).get('notes', []):
-                    matches_preferences = False
-                if 'low_cost' in preferences and float(spot['pricing_estimate']['estimated_hourly'].split('-')[1][1:]) > 3.00:
-                    matches_preferences = False
-                if 'secure' in preferences and 'Security' not in spot.get('uk_analysis', {}).get('recommended_for', []):
-                    matches_preferences = False
-                if 'ev_charging' in preferences and not spot.get('ev_charging', {}).get('available', False):
-                    matches_preferences = False
-                if 'accessible' in preferences and 'Disabled' not in spot.get('accessibility_features', []):
-                    matches_preferences = False
-            
-            if vehicle_type:
-                if vehicle_type == 'electric' and not spot.get('ev_charging', {}).get('available', False):
-                    matches_preferences = False
-                if vehicle_type == 'disabled' and 'Disabled' not in spot.get('accessibility_features', []):
-                    matches_preferences = False
-            
-            if matches_preferences:
-                filtered_spots.append(spot)
-        
-        return filtered_spots if filtered_spots else spots  # Return all if no matches
+        parking_spots = self.search_comprehensive_parking(lat, lng, parsed_input['preferences'])
+        scored_spots = [
+            {
+                'title': spot['title'],
+                'address': spot.get('address', {}).get('label', location),
+                'distance': f"{spot.get('distance', 0)}m",
+                'score': self.calculate_enhanced_ai_score(spot, parsed_input['preferences'], parsed_input['time_context']),
+                'raw_data': spot
+            } for spot in parking_spots
+        ] if parking_spots else self.generate_mock_parking_data(location, parsed_input['preferences'])
 
-    def get_nearby_locations(self, lat: float, lng: float) -> List[Dict]:
-        """Get nearby locations for broader suggestions"""
-        if not self.api_available:
-            return [{'name': 'Nearby City Centre', 'distance': 500, 'type': 'area'}]
-        
-        params = {
-            'at': f"{lat},{lng}",
-            'q': 'landmark;area;neighborhood',
-            'limit': 5,
-            'apiKey': self.api_key,
-            'in': f"circle:{lat},{lng};r=2000"
-        }
-        
-        try:
-            data = self.safe_api_request(self.base_url, params)
-            if not data or not data.get('items'):
-                return [{'name': 'Nearby City Centre', 'distance': 500, 'type': 'area'}]
-            
-            nearby = []
-            for item in data.get('items', []):
-                nearby.append({
-                    'name': item.get('title', 'Unknown'),
-                    'distance': item.get('distance', 0),
-                    'type': item.get('categories', [{}])[0].get('name', 'area')
-                })
-            return nearby
-        except Exception as e:
-            logger.error(f"Error in get_nearby_locations: {e}")
-            return [{'name': 'Nearby City Centre', 'distance': 500, 'type': 'area'}]
+        scored_spots.sort(key=lambda x: x['score'], reverse=True)
+        context.last_search = {'spots': scored_spots, 'is_mock': not parking_spots}
 
-    def get_location_specific_rules(self, location: str) -> List[str]:
-        """Get specific rules for UK locations"""
-        location_lower = location.lower()
-        rules = []
-        
-        if 'london' in location_lower:
-            rules.extend([
-                "Congestion Charge: £15/day (Mon-Fri 7am-6pm, Sat-Sun 12pm-6pm)",
-                "ULEZ: £12.50/day for non-compliant vehicles",
-                "Resident parking permits required in many areas",
-                "Red routes: No stopping except in marked bays",
-                "Single yellow lines: Usually 8:30am-6:30pm restrictions"
-            ])
-        elif any(city in location_lower for city in ['manchester', 'birmingham', 'leeds']):
-            rules.extend([
-                "City centre time limits commonly enforced",
-                "Pay and Display typically 8am-6pm Mon-Sat",
-                "Sunday parking often free or reduced rates",
-                "Loading bays enforced during business hours",
-                "Park and ride schemes available"
-            ])
-        elif 'glasgow' in location_lower or 'edinburgh' in location_lower:
-            rules.extend([
-                "Scottish parking regulations apply",
-                "Controlled parking zones in city centres",
-                "Resident permits common in central areas",
-                "Evening restrictions may apply until 8pm"
-            ])
-        
-        # Street-level rules
-        street_indicators = ['street', 'st', 'avenue', 'ave', 'road', 'rd', 'lane', 'close', 'square', 'place']
-        if any(ind in location_lower for ind in street_indicators):
-            rules.extend([
-                "On-street parking often Pay and Display",
-                "Check for resident permit zones",
-                "Single/double yellow lines strictly enforced"
-            ])
-        
-        # General UK rules
-        rules.extend([
-            "Blue badge holders: 3 hours free on yellow lines (if safe)",
-            "Double yellow lines: No parking at any time",
-            "Loading restrictions: Usually 8am-6pm Mon-Sat",
-            "School keep clear markings: No parking during school hours"
-        ])
-        
-        return rules
-
-    def get_location_pricing(self, location: str) -> Dict:
-        """Get pricing information for specific UK locations"""
-        location_lower = location.lower()
-        pricing = self.uk_parking_rules['pricing']
-        
-        if 'london' in location_lower:
-            if any(central in location_lower for central in ['central', 'zone 1', 'city', 'westminster', 'camden', 'islington']):
-                return {
-                    'type': 'Central London',
-                    'hourly': pricing['london_zones']['zone_1'],
-                    'daily': '£30-£50',
-                    'notes': ['Congestion charge applies', 'ULEZ charges apply', 'Premium location rates']
-                }
-            else:
-                return {
-                    'type': 'Outer London',
-                    'hourly': pricing['london_zones']['outer_london'],
-                    'daily': '£15-£30',
-                    'notes': ['ULEZ may apply', 'Better value than central areas']
-                }
-        
-        for city, price in pricing['major_cities'].items():
-            if city in location_lower:
-                return {
-                    'type': f'{city.title()} City Centre',
-                    'hourly': price,
-                    'daily': '£8-£20',
-                    'notes': ['City centre premium', 'Park and ride often cheaper', 'Evening rates may be lower']
-                }
-        
-        # Street-level or smaller towns
-        street_indicators = ['street', 'st', 'avenue', 'ave', 'road', 'rd', 'lane', 'close', 'square', 'place']
-        if any(ind in location_lower for ind in street_indicators):
-            return {
-                'type': 'On-Street/Town Parking',
-                'hourly': '£0.80-£2.50',
-                'daily': 'Not typically applicable',
-                'notes': ['Pay and Display common', 'Check for free periods', 'Resident zones may apply']
-            }
-        
         return {
-            'type': 'Town/Local Area',
-            'hourly': pricing['towns'],
-            'daily': '£5-£15',
-            'notes': ['Generally more affordable', 'Check for free periods', 'Local variations apply']
-        }
-
-    def handle_greeting(self, message: str, context: ParkingContext) -> Dict:
-        """Handle greeting with UK focus"""
-        response = random.choice(self.personality_responses['greeting'])
-        
-        return {
-            'message': response,
-            'response': "I can help you find parking spots across the UK, including on-street, off-street, EV charging, and accessible options. I also provide detailed rules and pricing. 🎯",
-            'suggestions': [
-                "Try: 'I need parking in London at 2pm'",
-                "Ask: 'What are the parking rules in Manchester?'",
-                "Ask: 'Find EV charging in Birmingham'"
-            ],
-            'type': 'greeting',
+            'message': random.choice(self.personality_responses['success']),
+            'response': f"Found {len(scored_spots)} parking spots near {address}!",
+            'data': {
+                'location': address,
+                'parking_spots': scored_spots[:5],
+                'is_mock': not parking_spots
+            },
+            'uk_parking_tip': random.choice(self.uk_parking_rules['general']),
+            'suggestions': ["Ask for details on a specific spot"],
+            'type': 'parking_results',
             'status': 'success'
         }
 
-    def handle_general_conversation(self, message: str, context: ParkingContext, entities: Dict) -> Dict:
-        """Handle general conversation with UK parking focus"""
-        responses = [
-            "I'm your UK parking specialist! 🇬🇧 How can I help you today?",
-            "Ready to help with all your UK parking needs! 🅿️ Tell me where or what you need!",
-            "I'm here for UK parking spots, rules, and pricing! ✨ What's on your mind?"
-        ]
-        
-        return {
-            'message': random.choice(responses),
-            'response': "I can help with finding parking spots (on-street, off-street, EV, or accessible), explaining UK parking rules, or providing pricing details. Just let me know your needs!",
-            'suggestions': [
-                "Find parking in [UK location]",
-                "Ask about EV or disabled parking",
-                "Get pricing for UK cities"
-            ],
-            'type': 'general',
-            'status': 'success'
-        }
-
-    def geocode_location(self, location_query: str) -> Tuple[Optional[float], Optional[float], Optional[str]]:
-        """Convert location query to coordinates with UK preference"""
-        if not self.api_available:
-            demo_coords = {
-                'london': (51.5074, -0.1278, 'London, UK'),
-                'birmingham': (52.4862, -1.8904, 'Birmingham, UK'),
-                'manchester': (53.4808, -2.2426, 'Manchester, UK'),
-                'leeds': (53.8008, -1.5491, 'Leeds, UK'),
-                'liverpool': (53.4084, -2.9916, 'Liverpool, UK'),
-                'bristol': (51.4545, -2.5879, 'Bristol, UK'),
-                'sheffield': (53.3811, -1.4701, 'Sheffield, UK'),
-                'glasgow': (55.8642, -4.2518, 'Glasgow, UK'),
-                'edinburgh': (55.9533, -3.1883, 'Edinburgh, UK')
-            }
-            
-            location_lower = location_query.lower()
-            for city, coords in demo_coords.items():
-                if city in location_lower:
-                    return coords
-            
-            # Check for street-level
-            street_indicators = ['street', 'st', 'avenue', 'ave', 'road', 'rd', 'lane', 'close', 'square', 'place']
-            if any(ind in location_lower for ind in street_indicators):
-                return 51.5074, -0.1278, f"{location_query}, UK"  # Default to generic UK location
-            
-            return demo_coords['london']
-        
-        params = {
-            'q': location_query,
-            'apiKey': self.api_key,
-            'limit': 5,
-            'in': f"bbox:{self.uk_bounds['west']},{self.uk_bounds['south']},{self.uk_bounds['east']},{self.uk_bounds['north']}"
-        }
-
-        try:
-            data = self.safe_api_request(self.geocoding_url, params)
-            
-            if data and data.get('items'):
-                for item in data['items']:
-                    position = item['position']
-                    if (self.uk_bounds['south'] <= position['lat'] <= self.uk_bounds['north'] and 
-                        self.uk_bounds['west'] <= position['lng'] <= self.uk_bounds['east']):
-                        address = item.get('address', {}).get('label', location_query)
-                        return position['lat'], position['lng'], address
-                
-                # Fallback to first result if no UK match
-                position = data['items'][0]['position']
-                address = data['items'][0].get('address', {}).get('label', location_query)
-                return position['lat'], position['lng'], address
-            else:
-                return None, None, None
-        except Exception as e:
-            logger.error(f"Geocoding error: {e}")
-            return None, None, None
-
-# Flask App Setup
 app = Flask(__name__)
 CORS(app)
-
-# Initialize bot with error handling
-try:
-    bot = IntelligentParksyBot()
-    logger.info("UK Parksy Bot initialized successfully")
-except Exception as e:
-    logger.error(f"Failed to initialize bot: {e}")
-    bot = None
+bot = EnhancedParkingChatbot()
 
 @app.route('/', methods=['GET'])
 def home():
     """API home endpoint"""
-    api_status = "active" if bot and bot.api_available else "demo mode"
-    
     return jsonify({
-        "message": "🇬🇧 UK Parksy Bot - Your British Parking Assistant!",
-        "version": "4.2 - Enhanced Interactivity and Location Handling",
-        "status": api_status,
-        "coverage": "United Kingdom Only",
+        "message": "🇬🇧 Enhanced Parking Chatbot - Powered by HERE.com!",
+        "version": "1.0 - UK Enhanced",
+        "status": "active",
         "features": [
-            "Real-time parking data (on-street, off-street, EV, accessible)",
-            "UK parking rules and regulations",
-            "Accurate pricing information",
-            "Location-specific guidance including streets",
-            "Nearby location suggestions",
-            "Robust error handling with mock data fallback"
+            "🧠 Natural language understanding",
+            "🔍 HERE.com parking search",
+            "🛣️ On-street, off-street, EV, and accessible parking",
+            "📊 Real-time availability",
+            "💰 UK pricing in pounds (£)"
         ],
-        "data_sources": [
-            "HERE.com Places API (when available)",
-            "UK parking regulations database",
-            "Local authority parking policies",
-            "Enhanced mock data for unrecognized locations"
-        ],
-        "personality": "Knowledgeable, engaging, and thoroughly British! 🎩",
         "endpoints": {
             "chat": "/api/chat",
             "health": "/api/health"
@@ -1237,92 +590,58 @@ def home():
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
-    api_status = "available" if bot and bot.api_available else "demo mode"
-    bot_status = "healthy" if bot else "error"
-    
     return jsonify({
-        "status": bot_status,
-        "bot_status": "Ready to help with UK parking! 🇬🇧",
-        "api_status": api_status,
+        "status": "healthy",
+        "bot_status": "ready to assist with UK parking!",
         "timestamp": datetime.now().isoformat(),
-        "version": "4.2",
+        "version": "1.0 - UK Enhanced",
         "here_api_configured": bool(os.getenv('HERE_API_KEY')),
-        "coverage": "United Kingdom",
-        "data_accuracy": "High - Real data + UK regulations (enhanced demo fallback)"
+        "uk_features": {
+            "currency": "GBP (£)",
+            "parking_rules": "UK-specific",
+            "location_bias": "United Kingdom"
+        }
     })
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
-    """Main chat endpoint - UK parking specialist"""
+    """Chat endpoint for parking queries"""
     try:
-        if not bot:
-            return jsonify({
-                "message": "I'm temporarily unavailable! 🔧",
-                "response": "The bot service is currently initializing. Please try again in a moment.",
-                "status": "error"
-            }), 503
-
         data = request.get_json()
-
         if not data or 'message' not in data:
             return jsonify({
-                "error": "I need a message to respond to! 😊",
+                "error": "Please provide a message!",
                 "status": "error",
-                "example": {"message": "Can I park on Oxford Street, London at 9pm?"}
+                "example": {"message": "Find parking near Oxford Street"}
             }), 400
 
         user_message = data['message'].strip()
         user_id = data.get('user_id', 'default')
-        
+
         if not user_message:
             return jsonify({
-                "message": "I'm here and ready to help with UK parking! 🇬🇧",
-                "response": "What would you like to know about parking in the UK? Try asking about a specific location, rules, or EV charging!",
-                "suggestions": ["Ask me about parking anywhere in the UK!"],
+                "message": "I'm here to help with parking!",
+                "response": "Tell me where you want to park!",
+                "suggestions": ["Ask about parking anywhere in the UK!"],
                 "status": "success"
             })
 
-        # Generate UK-focused response
         response = bot.generate_contextual_response(user_message, user_id)
         response['timestamp'] = datetime.now().isoformat()
-        response['coverage'] = "UK Only"
-        response['api_mode'] = "live" if bot.api_available else "demo"
-        
         return jsonify(response)
 
     except Exception as e:
-        logger.error(f"Chat endpoint error: {e}")
         return jsonify({
-            "message": "Sorry, I've encountered a technical issue! 🔧",
-            "response": "Don't worry - I'm still here to help with your UK parking needs. Please try again!",
-            "error": "Internal server error",
+            "message": "Blimey! Hit a snag!",
+            "response": "Try again, I'm here to help with parking!",
+            "error": str(e) if app.debug else "Technical error",
             "status": "error",
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "suggestions": ["Try your question again"]
         }), 500
-
-@app.errorhandler(404)
-def not_found(error):
-    return jsonify({
-        "message": "Endpoint not found! 🗺️",
-        "response": "Try the /api/chat endpoint for parking assistance or / for API information.",
-        "status": "error"
-    }), 404
-
-@app.errorhandler(500)
-def internal_error(error):
-    return jsonify({
-        "message": "Internal server error! 🔧",
-        "response": "Something went wrong on our end. Please try again.",
-        "status": "error"
-    }), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    debug_mode = os.environ.get('DEBUG', 'False').lower() == 'true'
-    
-    print("🇬🇧 Starting UK Parksy Bot...")
-    print("📍 Coverage: United Kingdom Only")
-    print(f"🎯 API Mode: {'Live' if bot and bot.api_available else 'Demo'}")
-    print("💬 Ready for accurate and engaging UK parking assistance!")
-    
-    app.run(host='0.0.0.0', port=port, debug=debug_mode)
+    print("🇬🇧 Starting Enhanced Parking Chatbot...")
+    print("🔍 Powered by HERE.com for UK parking data!")
+    app.run(host='0.0.0.0', port=port, debug=False)
