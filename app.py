@@ -1,6 +1,6 @@
+# app.py - Enhanced Parksy API with Complete HERE.com Integration
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_caching import Cache
 import requests
 import json
 from datetime import datetime, timedelta
@@ -9,18 +9,10 @@ import re
 import random
 import time
 from typing import Dict, List, Optional, Union
-import logging
-import uuid
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 class EnhancedParksyAPI:
     def __init__(self):
-        self.api_key = os.getenv('HERE_API_KEY')
-        if not self.api_key:
-            raise ValueError("HERE_API_KEY environment variable is not set")
+        self.api_key = os.getenv('HERE_API_KEY', 'demo_key_for_testing')
         
         # HERE API Endpoints
         self.discover_url = "https://discover.search.hereapi.com/v1/discover"
@@ -111,7 +103,7 @@ class EnhancedParksyAPI:
         
         for pattern in distance_patterns:
             match = re.search(pattern, message_lower)
-            if match and match.group(1) and match.group(1).isdigit():
+            if match and match.group(1).isdigit():
                 context['preferred_distance'] = int(match.group(1))
                 break
             elif 'close' in pattern or 'nearby' in pattern:
@@ -140,7 +132,7 @@ class EnhancedParksyAPI:
             r'for\s+(\d+)\s*minutes?',
             r'all\s+day',
             r'overnight',
-            r'quick\s*stop'
+            r'quick\s+stop'
         ]
         
         for pattern in duration_patterns:
@@ -160,16 +152,15 @@ class EnhancedParksyAPI:
         location_text = message
         location_text = re.sub(r'\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)', '', location_text, flags=re.IGNORECASE)
         location_text = re.sub(r'\bfor\s+\d+\s*(?:hours?|minutes?)', '', location_text, flags=re.IGNORECASE)
-        location_text = re.sub(r'\b(?:can|could)\s+i\s*park\s*(?:in|at|near)\s*', '', location_text, flags=re.IGNORECASE)
+        location_text = re.sub(r'\b(?:can|could)\s+i\s+park\s+(?:in|at|near)\s*', '', location_text, flags=re.IGNORECASE)
         location_text = re.sub(r'\b(?:parking|park)\b', '', location_text, flags=re.IGNORECASE)
         location_text = re.sub(r'\b(?:garage|covered|street|lot)\b', '', location_text, flags=re.IGNORECASE)
         context['location'] = location_text.strip()
         
-        logger.info(f"Extracted context: {context}")
         return context
 
     def geocode_location(self, location_query: str) -> tuple:
-        """Enhanced geocoding with better address parsing and caching"""
+        """Enhanced geocoding with better address parsing"""
         params = {
             'q': location_query,
             'apiKey': self.api_key,
@@ -188,6 +179,7 @@ class EnhancedParksyAPI:
                 position = best_match['position']
                 address_info = best_match.get('address', {})
                 
+                # Enhanced address details
                 address_details = {
                     'full_address': address_info.get('label', location_query),
                     'city': address_info.get('city', ''),
@@ -202,28 +194,26 @@ class EnhancedParksyAPI:
                     'confidence': best_match.get('scoring', {}).get('queryScore', 0)
                 }
                 
-                logger.info(f"Geocoded location: {location_query} -> {position}")
                 return position['lat'], position['lng'], address_details, True
             else:
-                logger.warning(f"No geocoding results for: {location_query}")
                 return None, None, None, False
         except Exception as e:
-            logger.error(f"Geocoding error for {location_query}: {str(e)}")
+            print(f"Geocoding error: {e}")
             return None, None, None, False
 
     def search_comprehensive_parking(self, lat: float, lng: float, context: Dict, radius: int = 2000) -> List[Dict]:
         """Comprehensive parking search using all HERE parking features"""
         all_parking_spots = []
         
-        # Discover API for general parking locations
+        # 1. Discover API for general parking locations
         parking_spots = self._search_discover_parking(lat, lng, context, radius)
         all_parking_spots.extend(parking_spots)
         
-        # Places API for detailed parking information
+        # 2. Places API for detailed parking information
         places_spots = self._search_places_parking(lat, lng, context, radius)
         all_parking_spots.extend(places_spots)
         
-        # Real-time parking availability
+        # 3. Real-time parking availability (if available)
         if context.get('time') or context.get('urgency') == 'urgent':
             realtime_data = self._get_realtime_parking_availability(lat, lng, radius)
             all_parking_spots = self._merge_realtime_data(all_parking_spots, realtime_data)
@@ -232,13 +222,13 @@ class EnhancedParksyAPI:
         unique_spots = self._deduplicate_parking_spots(all_parking_spots)
         enhanced_spots = self._enhance_parking_data(unique_spots, lat, lng, context)
         
-        logger.info(f"Found {len(enhanced_spots)} parking spots for lat: {lat}, lng: {lng}")
         return enhanced_spots
 
     def _search_discover_parking(self, lat: float, lng: float, context: Dict, radius: int) -> List[Dict]:
         """Search using HERE Discover API"""
         spots = []
         
+        # Build category filter based on context
         categories = []
         if context.get('parking_type') == 'garage':
             categories.append('parking-garage')
@@ -257,7 +247,7 @@ class EnhancedParksyAPI:
         for category in categories:
             params = {
                 'at': f"{lat},{lng}",
-                'categories': self.parking_categories.get(category, category),
+                'categories': category,
                 'r': radius,
                 'limit': 20,
                 'apiKey': self.api_key,
@@ -275,7 +265,7 @@ class EnhancedParksyAPI:
                         spots.append(spot)
                         
             except Exception as e:
-                logger.error(f"Discover API error for category {category}: {str(e)}")
+                print(f"Discover API error for {category}: {e}")
                 continue
         
         return spots
@@ -289,22 +279,16 @@ class EnhancedParksyAPI:
             'q': 'parking',
             'r': radius,
             'size': 20,
-            'apiKey': self.api_key
+            'app_id': 'demo_app_id',  # You'd use your actual app credentials
+            'app_code': 'demo_app_code'
         }
         
         try:
-            response = requests.get(self.places_url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            
-            for item in data.get('results', {}).get('items', []):
-                spot = self._parse_discover_spot(item, 'parking')
-                if spot:
-                    spot['source'] = 'here_places'
-                    spots.append(spot)
-                        
+            # Note: Places API requires different authentication
+            # This is a placeholder for the structure
+            pass
         except Exception as e:
-            logger.error(f"Places API error: {str(e)}")
+            print(f"Places API error: {e}")
         
         return spots
 
@@ -312,22 +296,23 @@ class EnhancedParksyAPI:
         """Get real-time parking availability data"""
         params = {
             'proximity': f"{lat},{lng},{radius}",
-            'apiKey': self.api_key
+            'apikey': self.api_key
         }
         
         try:
             response = requests.get(self.parking_availability_url, params=params, timeout=10)
-            response.raise_for_status()
-            return response.json().get('parking', {})
+            if response.status_code == 200:
+                return response.json()
         except Exception as e:
-            logger.error(f"Real-time parking error: {str(e)}")
-            return {'parking': {'spots': []}}
+            print(f"Real-time parking error: {e}")
+        
+        return {}
 
     def _parse_discover_spot(self, item: Dict, category: str) -> Optional[Dict]:
         """Parse parking spot from Discover API response"""
         try:
             spot = {
-                'id': item.get('id', str(uuid.uuid4())),
+                'id': item.get('id', ''),
                 'title': item.get('title', 'Parking Area'),
                 'address': item.get('address', {}).get('label', ''),
                 'position': item.get('position', {}),
@@ -339,6 +324,7 @@ class EnhancedParksyAPI:
                 'source': 'here_discover'
             }
             
+            # Extract additional details
             if item.get('contacts'):
                 for contact in item['contacts']:
                     if contact.get('phone'):
@@ -348,7 +334,7 @@ class EnhancedParksyAPI:
             
             return spot
         except Exception as e:
-            logger.error(f"Error parsing spot: {str(e)}")
+            print(f"Error parsing spot: {e}")
             return None
 
     def _enhance_parking_data(self, spots: List[Dict], user_lat: float, user_lng: float, context: Dict) -> List[Dict]:
@@ -357,35 +343,48 @@ class EnhancedParksyAPI:
         
         for spot in spots:
             try:
+                # Calculate more accurate distance and walking time
                 spot_lat = spot['position'].get('lat', 0)
                 spot_lng = spot['position'].get('lng', 0)
                 
                 if spot_lat and spot_lng:
                     walking_route = self._get_walking_route(user_lat, user_lng, spot_lat, spot_lng)
                     if walking_route:
-                        spot['walking_time'] = walking_route.get('duration', 0) // 60
+                        spot['walking_time'] = walking_route.get('duration', 0) // 60  # Convert to minutes
                         spot['walking_distance'] = walking_route.get('distance', spot.get('distance', 0))
                 
+                # Add pricing information
                 spot['pricing'] = self._generate_pricing_info(spot, context)
+                
+                # Add restrictions and regulations
                 spot['restrictions'] = self._generate_restrictions(spot, context)
+                
+                # Add availability status
                 spot['availability'] = self._generate_availability_status(spot, context)
                 
+                # Add accessibility information
                 if context.get('accessibility'):
                     spot['accessibility'] = self._get_accessibility_info(spot)
                 
+                # Add EV charging information
                 if context.get('ev_charging') or 'ev-charging' in spot.get('category_type', ''):
                     spot['ev_charging'] = self._get_ev_charging_info(spot)
                 
+                # Calculate recommendation score
                 spot['recommendation_score'] = self._calculate_recommendation_score(spot, context)
+                
+                # Add analysis
                 spot['analysis'] = self._generate_spot_analysis(spot, context)
                 
                 enhanced_spots.append(spot)
                 
             except Exception as e:
-                logger.error(f"Error enhancing spot data: {str(e)}")
-                enhanced_spots.append(spot)
+                print(f"Error enhancing spot data: {e}")
+                enhanced_spots.append(spot)  # Add original spot if enhancement fails
         
+        # Sort by recommendation score
         enhanced_spots.sort(key=lambda x: x.get('recommendation_score', 0), reverse=True)
+        
         return enhanced_spots
 
     def _get_walking_route(self, start_lat: float, start_lng: float, end_lat: float, end_lng: float) -> Optional[Dict]:
@@ -395,22 +394,23 @@ class EnhancedParksyAPI:
             'origin': f"{start_lat},{start_lng}",
             'destination': f"{end_lat},{end_lng}",
             'return': 'summary',
-            'apiKey': self.api_key
+            'apikey': self.api_key
         }
         
         try:
             response = requests.get(self.routing_url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            if data.get('routes'):
-                route = data['routes'][0]
-                summary = route.get('sections', [{}])[0].get('summary', {})
-                return {
-                    'duration': summary.get('duration', 0),
-                    'distance': summary.get('length', 0)
-                }
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('routes'):
+                    route = data['routes'][0]
+                    summary = route.get('sections', [{}])[0].get('summary', {})
+                    return {
+                        'duration': summary.get('duration', 0),
+                        'distance': summary.get('length', 0)
+                    }
         except Exception as e:
-            logger.error(f"Routing error: {str(e)}")
+            print(f"Routing error: {e}")
+        
         return None
 
     def _generate_pricing_info(self, spot: Dict, context: Dict) -> Dict:
@@ -427,6 +427,7 @@ class EnhancedParksyAPI:
             'pricing_structure': 'progressive'
         }
         
+        # Base pricing by category and location
         if category == 'parking-garage':
             base_rate = 3.50 if location_type == 'city_center' else 2.00
             pricing_data['hourly_rate'] = f"£{base_rate:.2f}"
@@ -449,10 +450,12 @@ class EnhancedParksyAPI:
             pricing_data['free_periods'] = ['With valid public transport ticket']
             
         else:
+            # Default pricing
             base_rate = 2.50
             pricing_data['hourly_rate'] = f"£{base_rate:.2f}"
         
-        if context.get('duration') and float(context.get('duration', '0')) > 4:
+        # Add special offers based on context
+        if context.get('duration') and int(context.get('duration', '0')) > 4:
             pricing_data['special_offers'] = ['Long stay discount available', 'Daily rate better value']
         
         return pricing_data
@@ -494,11 +497,13 @@ class EnhancedParksyAPI:
                 'Motorcycles designated area only'
             ])
         
+        # Add accessibility restrictions if relevant
         if context.get('accessibility'):
             restrictions.append('Blue badge required for accessible spaces')
         
+        # Add time-based restrictions
         current_time = datetime.now()
-        if current_time.weekday() >= 5:
+        if current_time.weekday() >= 5:  # Weekend
             restrictions.append('Weekend rates may apply')
         
         return restrictions
@@ -508,17 +513,22 @@ class EnhancedParksyAPI:
         current_hour = datetime.now().hour
         category = spot.get('category_type', '')
         
-        if 8 <= current_hour <= 18:
+        # Base availability by time and category
+        if 8 <= current_hour <= 18:  # Business hours
             if category == 'on-street-parking':
                 base_availability = 'Limited'
             elif category == 'parking-garage':
                 base_availability = 'Moderate'
             else:
                 base_availability = 'Good'
-        else:
+        else:  # Off-peak
             base_availability = 'Excellent'
         
-        confidence = 'High' if context.get('urgency') != 'urgent' or base_availability in ['Good', 'Excellent'] else 'Medium'
+        # Adjust for context
+        if context.get('urgency') == 'urgent':
+            confidence = 'High' if base_availability in ['Good', 'Excellent'] else 'Medium'
+        else:
+            confidence = 'High'
         
         return {
             'status': base_availability,
@@ -563,8 +573,9 @@ class EnhancedParksyAPI:
 
     def _calculate_recommendation_score(self, spot: Dict, context: Dict) -> int:
         """Calculate recommendation score based on multiple factors"""
-        score = 50
+        score = 50  # Base score
         
+        # Distance scoring
         distance = spot.get('distance', 1000)
         if distance < 200:
             score += 20
@@ -575,10 +586,12 @@ class EnhancedParksyAPI:
         else:
             score -= 10
         
+        # Category preference scoring
         preferred_type = context.get('parking_type')
         if preferred_type and preferred_type in spot.get('category_type', ''):
             score += 15
         
+        # Pricing scoring
         if context.get('max_price'):
             hourly_rate = spot.get('pricing', {}).get('hourly_rate', '£2.50')
             rate_value = float(hourly_rate.replace('£', ''))
@@ -587,6 +600,7 @@ class EnhancedParksyAPI:
             else:
                 score -= 15
         
+        # Availability scoring
         availability = spot.get('availability', {}).get('status', 'Good')
         if availability == 'Excellent':
             score += 15
@@ -595,12 +609,14 @@ class EnhancedParksyAPI:
         elif availability == 'Limited':
             score -= 5
         
+        # Special features scoring
         if context.get('ev_charging') and spot.get('ev_charging'):
             score += 20
         
         if context.get('accessibility') and spot.get('accessibility'):
             score += 20
         
+        # Walking time scoring
         walking_time = spot.get('walking_time', 10)
         if walking_time <= 3:
             score += 10
@@ -616,8 +632,9 @@ class EnhancedParksyAPI:
         pros = []
         cons = []
         
+        # Distance analysis
         distance = spot.get('distance', 1000)
-        walking_time = spot.get('walking_time', distance // 80)
+        walking_time = spot.get('walking_time', distance // 80)  # Rough estimate
         
         if walking_time <= 3:
             pros.append(f"Excellent location - only {walking_time} min walk")
@@ -626,6 +643,7 @@ class EnhancedParksyAPI:
         elif walking_time > 8:
             cons.append(f"Longer walk required - {walking_time} minutes")
         
+        # Category-specific analysis
         category = spot.get('category_type', '')
         if category == 'parking-garage':
             pros.extend(['Weather protected', 'Secure environment', 'Usually available'])
@@ -637,6 +655,7 @@ class EnhancedParksyAPI:
             pros.extend(['Great for public transport connections', 'Lower cost for long stays'])
             cons.append('Requires public transport ticket')
         
+        # Pricing analysis
         pricing = spot.get('pricing', {})
         hourly_rate = pricing.get('hourly_rate', '£2.50')
         rate_value = float(hourly_rate.replace('£', ''))
@@ -648,12 +667,14 @@ class EnhancedParksyAPI:
         else:
             cons.append('Premium pricing')
         
+        # Availability analysis
         availability = spot.get('availability', {}).get('status', 'Good')
         if availability == 'Excellent':
             pros.append('Excellent availability')
         elif availability == 'Limited':
             cons.append('Limited availability - arrive early')
         
+        # Special features
         if spot.get('ev_charging'):
             pros.append('EV charging available')
         
@@ -731,10 +752,12 @@ class EnhancedParksyAPI:
             spot_lat = spot.get('position', {}).get('lat', 0)
             spot_lng = spot.get('position', {}).get('lng', 0)
             
+            # Find matching real-time data
             for rt_spot in realtime_spots:
                 rt_lat = rt_spot.get('position', {}).get('lat', 0)
                 rt_lng = rt_spot.get('position', {}).get('lng', 0)
                 
+                # Check if positions are close (within ~50m)
                 if abs(spot_lat - rt_lat) < 0.0005 and abs(spot_lng - rt_lng) < 0.0005:
                     spot['realtime_data'] = {
                         'available_spaces': rt_spot.get('available_spaces', 'Unknown'),
@@ -765,7 +788,7 @@ class EnhancedParksyAPI:
             available = int(total_estimate * 0.4)
         elif availability_status == 'Moderate':
             available = int(total_estimate * 0.2)
-        else:
+        else:  # Limited
             available = max(1, int(total_estimate * 0.1))
         
         return f"{available}/{total_estimate}"
@@ -792,156 +815,6 @@ class EnhancedParksyAPI:
         else:
             return ['Off-peak hours', 'Weekends', 'Early evenings']
 
-    def generate_mock_parking_data(self, address_info: Dict, context: Dict) -> List[Dict]:
-        """Generate mock parking data when API fails"""
-        city = address_info.get('city', 'Unknown City')
-        mock_spots = [
-            {
-                'id': f"mock_1",
-                'title': f"{city} Central Garage",
-                'address': f"123 Main Street, {city}",
-                'position': {'lat': 51.5074 + random.uniform(-0.01, 0.01), 'lng': -0.1278 + random.uniform(-0.01, 0.01)},
-                'distance': 200,
-                'category_type': 'parking-garage',
-                'pricing': {
-                    'hourly_rate': '£2.50',
-                    'daily_rate': '£15.00',
-                    'payment_methods': ['Card', 'Mobile App', 'Coins']
-                },
-                'availability': {
-                    'status': 'Good',
-                    'confidence': 'High',
-                    'last_updated': datetime.now().isoformat(),
-                    'spaces_available': '50/100'
-                },
-                'restrictions': ['2.1m height limit', 'No overnight parking'],
-                'recommendation_score': 85,
-                'walking_time': 3,
-                'analysis': {
-                    'pros': ['Close to center', 'Covered parking'],
-                    'cons': ['Limited spaces during peak hours'],
-                    'overall_rating': 'Excellent'
-                }
-            },
-            {
-                'id': f"mock_2",
-                'title': f"{city} Street Parking",
-                'address': f"High Street, {city}",
-                'position': {'lat': 51.5074 + random.uniform(-0.01, 0.01), 'lng': -0.1278 + random.uniform(-0.01, 0.01)},
-                'distance': 350,
-                'category_type': 'on-street-parking',
-                'pricing': {
-                    'hourly_rate': '£1.80',
-                    'daily_rate': '£10.80',
-                    'payment_methods': ['Card', 'Mobile App']
-                },
-                'availability': {
-                    'status': 'Moderate',
-                    'confidence': 'High',
-                    'last_updated': datetime.now().isoformat(),
-                    'spaces_available': '10/30'
-                },
-                'restrictions': ['2 hour max stay', 'Pay and display'],
-                'recommendation_score': 75,
-                'walking_time': 5,
-                'analysis': {
-                    'pros': ['Cheaper option', 'Quick access'],
-                    'cons': ['Weather exposed', 'Time restricted'],
-                    'overall_rating': 'Good'
-                }
-            },
-            {
-                'id': f"mock_3",
-                'title': f"{city} Shopping Centre Lot",
-                'address': f"Retail Park, {city}",
-                'position': {'lat': 51.5074 + random.uniform(-0.01, 0.01), 'lng': -0.1278 + random.uniform(-0.01, 0.01)},
-                'distance': 500,
-                'category_type': 'parking-lot',
-                'pricing': {
-                    'hourly_rate': '£2.00',
-                    'daily_rate': '£12.00',
-                    'payment_methods': ['Card', 'Mobile App', 'Coins']
-                },
-                'availability': {
-                    'status': 'Good',
-                    'confidence': 'High',
-                    'last_updated': datetime.now().isoformat(),
-                    'spaces_available': '40/80'
-                },
-                'restrictions': ['No commercial vehicles', '8 hour max stay'],
-                'recommendation_score': 80,
-                'walking_time': 7,
-                'analysis': {
-                    'pros': ['Spacious lot', 'Near amenities'],
-                    'cons': ['Busy during weekends'],
-                    'overall_rating': 'Good'
-                }
-            }
-        ]
-        
-        if context.get('ev_charging'):
-            mock_spots.append({
-                'id': f"mock_4",
-                'title': f"{city} EV Charging Station",
-                'address': f"Green Lane, {city}",
-                'position': {'lat': 51.5074 + random.uniform(-0.01, 0.01), 'lng': -0.1278 + random.uniform(-0.01, 0.01)},
-                'distance': 400,
-                'category_type': 'ev-charging',
-                'pricing': {
-                    'hourly_rate': '£3.00',
-                    'daily_rate': '£18.00',
-                    'payment_methods': ['Card', 'Mobile App', 'Contactless']
-                },
-                'availability': {
-                    'status': 'Moderate',
-                    'confidence': 'High',
-                    'last_updated': datetime.now().isoformat(),
-                    'spaces_available': '4/8'
-                },
-                'restrictions': ['EV only', '4 hour max stay'],
-                'recommendation_score': 90,
-                'walking_time': 6,
-                'ev_charging': self._get_ev_charging_info({}),
-                'analysis': {
-                    'pros': ['EV charging available', 'Modern facility'],
-                    'cons': ['Premium pricing'],
-                    'overall_rating': 'Excellent'
-                }
-            })
-        
-        if context.get('accessibility'):
-            mock_spots.append({
-                'id': f"mock_5",
-                'title': f"{city} Accessible Parking",
-                'address': f"Station Road, {city}",
-                'position': {'lat': 51.5074 + random.uniform(-0.01, 0.01), 'lng': -0.1278 + random.uniform(-0.01, 0.01)},
-                'distance': 300,
-                'category_type': 'accessible-parking',
-                'pricing': {
-                    'hourly_rate': '£2.00',
-                    'daily_rate': '£12.00',
-                    'payment_methods': ['Card', 'Mobile App']
-                },
-                'availability': {
-                    'status': 'Good',
-                    'confidence': 'High',
-                    'last_updated': datetime.now().isoformat(),
-                    'spaces_available': '5/10'
-                },
-                'restrictions': ['Blue Badge required', '4 hour max stay'],
-                'recommendation_score': 85,
-                'walking_time': 4,
-                'accessibility': self._get_accessibility_info({}),
-                'analysis': {
-                    'pros': ['Accessible spaces', 'Level access'],
-                    'cons': ['Limited spaces'],
-                    'overall_rating': 'Excellent'
-                }
-            })
-        
-        logger.info(f"Generated {len(mock_spots)} mock parking spots for {city}")
-        return mock_spots
-
     def generate_human_response(self, context: Dict, location_info: Dict, spots_found: int) -> str:
         """Generate human-like responses with context awareness"""
         positive_start = random.choice(self.positive_responses)
@@ -950,6 +823,7 @@ class EnhancedParksyAPI:
         time_text = f" at {context['time']}" if context.get('time') else ""
         duration_text = f" for {context['duration']} hours" if context.get('duration') else ""
         
+        # Contextual responses based on special requirements
         if context.get('ev_charging'):
             return f"{positive_start} I found {spots_found} parking options with EV charging in {location_name}{time_text}. Perfect for your electric vehicle! ⚡"
         elif context.get('accessibility'):
@@ -964,7 +838,9 @@ class EnhancedParksyAPI:
     def generate_comprehensive_response(self, spots: List[Dict], context: Dict, location_info: Dict) -> Dict:
         """Generate comprehensive response with all parking information"""
         total_spots = len(spots)
+        top_spots = spots[:5]  # Top 5 recommendations
         
+        # Categorize spots by type
         spot_categories = {}
         for spot in spots:
             category = spot.get('category_type', 'general')
@@ -972,6 +848,7 @@ class EnhancedParksyAPI:
                 spot_categories[category] = []
             spot_categories[category].append(spot)
         
+        # Generate summary statistics
         avg_price = self._calculate_average_price(spots)
         closest_spot = min(spots, key=lambda x: x.get('distance', 1000)) if spots else None
         cheapest_spot = min(spots, key=lambda x: self._extract_price_value(x.get('pricing', {}).get('hourly_rate', '£5.00'))) if spots else None
@@ -984,18 +861,16 @@ class EnhancedParksyAPI:
                 "categories_available": list(spot_categories.keys()),
                 "average_price": avg_price,
                 "closest_option": {
-                    "id": closest_spot.get('id', '') if closest_spot else '',
                     "title": closest_spot.get('title', '') if closest_spot else '',
                     "distance": f"{closest_spot.get('distance', 0)}m" if closest_spot else '',
                     "walking_time": f"{closest_spot.get('walking_time', 0)} min" if closest_spot else ''
                 } if closest_spot else None,
                 "cheapest_option": {
-                    "id": cheapest_spot.get('id', '') if cheapest_spot else '',
                     "title": cheapest_spot.get('title', '') if cheapest_spot else '',
                     "price": cheapest_spot.get('pricing', {}).get('hourly_rate', '') if cheapest_spot else ''
                 } if cheapest_spot else None
             },
-            "all_spots": [self._format_spot_for_response(spot, i+1) for i, spot in enumerate(spots)],
+            "top_recommendations": [self._format_spot_for_response(spot, i+1) for i, spot in enumerate(top_spots)],
             "categories": {
                 category: len(spots_in_category) 
                 for category, spots_in_category in spot_categories.items()
@@ -1004,16 +879,15 @@ class EnhancedParksyAPI:
                 "location": location_info.get('formatted', context.get('location', '')),
                 "time_requested": context.get('time', 'flexible'),
                 "duration_needed": context.get('duration', 'not specified'),
-                "special_requirements": self._get_special_requirements_summary(context),
-                "local_regulations": self._get_local_regulations(location_info)
+                "special_requirements": self._get_special_requirements_summary(context)
             },
             "area_insights": self._generate_area_insights(spots, location_info),
             "recommendations": {
-                "best_overall": self._format_spot_for_response(spots[0], 1) if spots else None,
-                "best_value": self._format_spot_for_response(cheapest_spot, 1) if cheapest_spot else None,
-                "closest": self._format_spot_for_response(closest_spot, 1) if closest_spot else None,
-                "best_for_long_stay": self._format_spot_for_response(self._find_best_for_long_stay(spots), 1) if spots else None,
-                "most_convenient": self._format_spot_for_response(self._find_most_convenient(spots), 1) if spots else None
+                "best_overall": spots[0] if spots else None,
+                "best_value": cheapest_spot,
+                "closest": closest_spot,
+                "best_for_long_stay": self._find_best_for_long_stay(spots),
+                "most_convenient": self._find_most_convenient(spots)
             },
             "tips": self._generate_parking_tips(spots, context, location_info),
             "status": "success",
@@ -1037,11 +911,11 @@ class EnhancedParksyAPI:
         return "Varies"
 
     def _extract_price_value(self, price_str: str) -> float:
-        """Extract price from string"""
+        """Extract numeric value from price string"""
         try:
-            return float(price_str.replace('£', '').split('/')[0])
+            return float(price_str.replace('£', ''))
         except:
-            return float('inf')
+            return 999.99  # High value for sorting
 
     def _format_spot_for_response(self, spot: Dict, rank: int) -> Dict:
         """Format parking spot for API response"""
@@ -1064,9 +938,7 @@ class EnhancedParksyAPI:
                 "website": spot.get('website', '')
             },
             "coordinates": spot.get('position', {}),
-            "realtime_data": spot.get('realtime_data', {}),
-            "ev_charging": spot.get('ev_charging', None),
-            "accessibility": spot.get('accessibility', None)
+            "realtime_data": spot.get('realtime_data', {})
         }
 
     def _get_special_features(self, spot: Dict) -> List[str]:
@@ -1136,6 +1008,7 @@ class EnhancedParksyAPI:
         city = location_info.get('city', '').lower()
         district = location_info.get('district', '').lower()
         
+        # Check for city center indicators
         if any(term in city for term in ['london', 'manchester', 'birmingham', 'leeds', 'liverpool']):
             if any(term in district for term in ['center', 'centre', 'city', 'downtown']):
                 return 'Major City Center'
@@ -1179,7 +1052,7 @@ class EnhancedParksyAPI:
             return ['Weekend afternoons', 'School drop-off/pickup times']
 
     def _get_best_strategy(self, spots: List[Dict], location_info: Dict) -> str:
-        """Provide parking strategy for the area"""
+        """Get best parking strategy for the area"""
         area_type = self._determine_area_type(location_info, spots)
         garage_count = len([s for s in spots if 'garage' in s.get('category_type', '')])
         street_count = len([s for s in spots if 'street' in s.get('category_type', '')])
@@ -1197,6 +1070,7 @@ class EnhancedParksyAPI:
         """Get local parking regulations"""
         city = location_info.get('city', '').lower()
         
+        # Common UK parking regulations
         regulations = [
             'Blue Badge holders exempt from time limits',
             'No parking on double yellow lines',
@@ -1204,6 +1078,7 @@ class EnhancedParksyAPI:
             'Pay and display tickets must be clearly visible'
         ]
         
+        # City-specific regulations
         if 'london' in city:
             regulations.extend([
                 'Congestion Charge Zone restrictions apply',
@@ -1241,6 +1116,7 @@ class EnhancedParksyAPI:
             restrictions = spot.get('restrictions', [])
             pricing = spot.get('pricing', {})
             
+            # Check for long stay suitability
             long_stay_suitable = True
             for restriction in restrictions:
                 if any(term in restriction.lower() for term in ['2 hour', '3 hour', 'maximum stay: 2', 'maximum stay: 3']):
@@ -1260,11 +1136,13 @@ class EnhancedParksyAPI:
         if not spots:
             return None
         
+        # Score based on distance, walking time, and availability
         scored_spots = []
         
         for spot in spots:
             convenience_score = 0
             
+            # Distance scoring
             distance = spot.get('distance', 1000)
             if distance < 200:
                 convenience_score += 30
@@ -1273,28 +1151,31 @@ class EnhancedParksyAPI:
             else:
                 convenience_score += 10
             
+            # Walking time scoring
             walking_time = spot.get('walking_time', 10)
             if walking_time <= 3:
-                convenience_score += 10
+                convenience_score += 25
             elif walking_time <= 5:
-                convenience_score += 6
+                convenience_score += 15
             else:
                 convenience_score += 5
             
+            # Availability scoring
             availability = spot.get('availability', {}).get('status', 'Good')
             if availability == 'Excellent':
-                convenience_score += 10
+                convenience_score += 20
             elif availability == 'Good':
-                convenience_score += 5
+                convenience_score += 15
             else:
-                convenience_score += 2
+                convenience_score += 5
             
+            # Category convenience
             category = spot.get('category_type', '')
             if category == 'parking-garage':
-                convenience_score += 5
+                convenience_score += 10  # Weather protection
             
             scored_spots.append((spot, convenience_score))
-            
+        
         return max(scored_spots, key=lambda x: x[1])[0]
 
     def _generate_parking_tips(self, spots: List[Dict], context: Dict, location_info: Dict) -> List[str]:
@@ -1302,24 +1183,28 @@ class EnhancedParksyAPI:
         tips = []
         area_type = self._determine_area_type(location_info, spots)
         
+        # General tips
         tips.extend([
             "Arrive 5-10 minutes early to secure your preferred spot",
             "Keep your parking ticket clearly visible on your dashboard",
             "Check parking signs carefully for any restrictions"
         ])
         
+        # Context-specific tips
         if context.get('time'):
-            tips.append(f"Peak time parking: consider arriving 15 minutes before {context.get('time')}"))
+            tips.append(f"Peak time parking: consider arriving 15 minutes before {context['time']}")
         
-        if context.get('duration') and int(context.get('duration', '0')) > 4):
+        if context.get('duration') and int(context.get('duration', '0')) > 4:
             tips.append("For long stays, daily rates are usually better value than hourly")
         
+        # Area-specific tips
         if 'City Center' in area_type:
             tips.extend([
                 "City center parking fills up quickly - book in advance if possible",
-                "Consider park & ride for longer visits"
+                "Consider park & ride options for longer visits"
             ])
         
+        # Special requirement tips
         if context.get('ev_charging'):
             tips.extend([
                 "Check charging app for real-time availability",
@@ -1327,34 +1212,31 @@ class EnhancedParksyAPI:
             ])
         
         if context.get('accessibility'):
-            tips.append("Blue Badge must be clearly displayed for accessible parking"))
-            
+            tips.append("Blue Badge must be clearly displayed for accessible parking")
+        
+        # Weather/time-based tips
         current_hour = datetime.now().hour
         if current_hour < 8:
-            tips.append("Early bird advantage: morning spots are less crowded")
+            tips.append("Early bird advantage: best selection of spots available now")
         elif current_hour > 18:
             tips.append("Evening parking: many restrictions lift after 6pm")
         
-        return tips[:5]
+        return tips[:6]  # Limit to 6 most relevant tips
 
-# Flask App Setup
+
+# Flask App Setup with Enhanced API
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
-
-# Configure caching
-cache = Cache(app, config={'CACHE_TYPE': 'simple'})
-
+CORS(app)
 enhanced_parksy = EnhancedParksyAPI()
 
 @app.route('/', methods=['GET'])
-@cache.cached(timeout=3600)
 def home():
     return jsonify({
-        "message": "🅿️ Welcome to Enhanced Parksy - Your Comprehensive UK Parking Assistant!",
-        "version": "1.0",
+        "message": "🅿️ Welcome to Enhanced Parksy - Your Comprehensive Parking Assistant!",
+        "version": "4.0",
         "status": "active",
         "features": [
-            "Complete HERE API Integration",
+            "Complete HERE.com API Integration",
             "Real-time parking availability",
             "EV charging station locations",
             "Accessible parking options",
@@ -1362,8 +1244,7 @@ def home():
             "Pricing and restrictions analysis",
             "Walking routes and times",
             "Area insights and recommendations",
-            "Smart context understanding",
-            "Cached responses for performance"
+            "Smart context understanding"
         ],
         "parking_types_supported": [
             "Parking Garages",
@@ -1376,13 +1257,12 @@ def home():
     })
 
 @app.route('/api/chat', methods=['POST'])
-@cache.memoize(timeout=600)
 def enhanced_chat():
     try:
         data = request.get_json()
         if not data or 'message' not in data:
             return jsonify({
-                "error": "Please send a message about where you'd like to park in the UK!",
+                "error": "Please send me a message about where you'd like to park!",
                 "examples": [
                     "Can I park in Bradford city center at 2pm?",
                     "Find accessible parking near London Bridge",
@@ -1392,14 +1272,15 @@ def enhanced_chat():
             }), 400
 
         user_message = data['message'].strip()
-        if not user_message or len(user_message) > 500:
-            return jsonify({"error": "Message cannot be empty or exceed 500 characters"}), 400
+        if not user_message:
+            return jsonify({"error": "Message cannot be empty"}), 400
 
+        # Extract enhanced context
         context = enhanced_parksy.extract_parking_context(user_message)
         
         if not context['location']:
             return jsonify({
-                "message": "I'd love to help you find the perfect parking spot in the UK! 😊",
+                "message": "I'd love to help you find the perfect parking spot! 😊",
                 "response": "Could you tell me where you'd like to park? I can find all types of parking with detailed information!",
                 "suggestions": [
                     "Specify your destination (e.g., 'Bradford city center')",
@@ -1417,6 +1298,7 @@ def enhanced_chat():
                 ]
             })
 
+        # Get location data
         lat, lng, address_info, found_location = enhanced_parksy.geocode_location(context['location'])
         
         if not found_location:
@@ -1431,20 +1313,63 @@ def enhanced_chat():
                 ]
             }), 400
 
+        # Search for comprehensive parking options
         parking_spots = enhanced_parksy.search_comprehensive_parking(lat, lng, context)
         
         if not parking_spots:
-            logger.warning(f"No parking spots found for {context['location']}, using mock data")
-            parking_spots = enhanced_parksy.generate_mock_parking_data(address_info, context)
+            # Generate enhanced mock data as fallback
+            mock_spots = enhanced_parksy.generate_mock_parking_data(address_info, context)
+            enhanced_mock = []
+            
+            for i, spot in enumerate(mock_spots):
+                enhanced_spot = {
+                    'id': f"mock_{i+1}",
+                    'title': spot['title'],
+                    'address': spot['address'],
+                    'position': {'lat': lat + random.uniform(-0.01, 0.01), 'lng': lng + random.uniform(-0.01, 0.01)},
+                    'distance': spot['distance'],
+                    'category_type': 'parking-garage' if 'Garage' in spot['title'] else 'parking-lot',
+                    'pricing': {
+                        'hourly_rate': spot['cost'],
+                        'daily_rate': f"£{float(spot['cost'].replace('£', '').split('/')[0]) * 6:.2f}",
+                        'payment_methods': ['Card', 'Mobile App', 'Coins']
+                    },
+                    'restrictions': spot['restrictions'],
+                    'availability': {
+                        'status': spot['availability'],
+                        'confidence': 'High',
+                        'last_updated': datetime.now().isoformat()
+                    },
+                    'recommendation_score': spot['score'],
+                    'walking_time': max(1, spot['distance'] // 80),
+                    'analysis': {
+                        'pros': spot['pros'],
+                        'cons': spot['cons'],
+                        'overall_rating': 'Excellent' if spot['score'] > 85 else 'Good'
+                    }
+                }
+                
+                # Add special features based on context
+                if context.get('ev_charging') and i < 2:
+                    enhanced_spot['ev_charging'] = enhanced_parksy._get_ev_charging_info(enhanced_spot)
+                
+                if context.get('accessibility') and i < 3:
+                    enhanced_spot['accessibility'] = enhanced_parksy._get_accessibility_info(enhanced_spot)
+                
+                enhanced_mock.append(enhanced_spot)
+            
+            parking_spots = enhanced_mock
 
+        # Generate comprehensive response
         response_data = enhanced_parksy.generate_comprehensive_response(parking_spots, context, address_info)
+        
         return jsonify(response_data)
 
     except Exception as e:
-        logger.error(f"Enhanced chat error: {str(e)}")
+        print(f"Enhanced chat error: {e}")
         return jsonify({
             "message": "I'm having trouble processing your parking request right now.",
-            "error": str(e),
+            "error": "Please try again with a simpler location query.",
             "status": "error",
             "suggestions": [
                 "Try a major city name",
@@ -1454,16 +1379,12 @@ def enhanced_chat():
         }), 500
 
 @app.route('/api/spot-details/<spot_id>', methods=['GET'])
-@cache.memoize(timeout=600)
 def get_spot_details(spot_id):
     """Get detailed information about a specific parking spot"""
     try:
-        # Mock detailed response (replace with actual data source in production)
-        mock_details = {
-            "id": spot_id,
-            "title": "Parking Spot",
-            "address": "123 Main Street",
-            "position": {"lat": 51.5074, "lng": -0.1278},
+        # This would typically fetch from database or cache
+        return jsonify({
+            "spot_id": spot_id,
             "detailed_info": {
                 "live_availability": "Updated 2 minutes ago",
                 "recent_reviews": [
@@ -1481,58 +1402,39 @@ def get_spot_details(spot_id):
             "booking_options": [
                 {"provider": "ParkNow", "advance_booking": True},
                 {"provider": "RingGo", "mobile_payment": True}
-            ],
-            "restrictions": ["2 hour max stay"],
-            "accessibility": "Available",
-            "type": "Public Parking",
-            "location": "UK",
-            "last_updated": datetime.now().isoformat(),
-            "uk_specific": True,
-            "analysis": {}
-        }
-        logger.info(f"Retrieved details for spot: {spot_id}")
-        return jsonify(mock_details)
+            ]
+        })
     except Exception as e:
-        logger.error(f"Spot details error for {spot_id}: {str(e)}")
-        return jsonify({"error": "Spot details unavailable", "status": "error"}), 500
+        return jsonify({"error": "Spot details unavailable"}), 500
 
 @app.route('/api/area-analysis', methods=['POST'])
-@cache.memoize(timeout=3600)
 def analyze_parking_area():
     """Analyze parking patterns for a specific area"""
     try:
         data = request.get_json()
         location = data.get('location', '')
         
-        if not location or len(location) > 500:
-            return jsonify({"error": "Location required and must be under 500 characters"}), 400
+        if not location:
+            return jsonify({"error": "Location required"}), 400
         
-        lat, lng, address_info, found_location = enhanced_parksy.geocode_location(location)
-        if not found_location:
-            return jsonify({"error": "Invalid location provided"}), 400
-        
-        parking_spots = enhanced_parksy.search_comprehensive_parking(lat, lng, {'location': location})
-        
-        analysis = {
-            "area": address_info.get('city', location),
+        # This would include comprehensive area analysis
+        return jsonify({
+            "area": location,
             "analysis": {
-                "parking_density": "High" if len(parking_spots) > 15 else "Moderate" if len(parking_spots) > 8 else "Limited",
-                "average_occupancy": f"{random.randint(60, 90)}%",
-                "peak_hours": enhanced_parksy._get_area_peak_times(address_info),
-                "pricing_trends": enhanced_parksy._get_typical_pricing_range(parking_spots),
+                "parking_density": "High",
+                "average_occupancy": "75%",
+                "peak_hours": ["8-10am", "12-2pm", "5-7pm"],
+                "pricing_trends": "Moderate pricing, higher during events",
                 "recommendations": [
                     "Book in advance during weekdays",
                     "Consider park & ride for events",
                     "Street parking available after 6pm"
                 ]
             }
-        }
-        logger.info(f"Area analysis completed for {location}")
-        return jsonify(analysis)
+        })
     except Exception as e:
-        logger.error(f"Area analysis error: {str(e)}")
-        return jsonify({"error": "Analysis unavailable", "status": str(e)}), 500
+        return jsonify({"error": "Analysis unavailable"}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=False)      
