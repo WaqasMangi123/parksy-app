@@ -1053,10 +1053,6 @@ class RealTimeParksyAPI:
         time_text = f" at {context['time']}" if context.get('time') else ""
         duration_text = f" for {context['duration']} hours" if context.get('duration') else ""
         
-        if is_fallback:
-            return f"{positive_start} You can definitely park in {location_name}! I found {spots_found} excellent parking options{time_text}{duration_text}. Here's everything available:"
-        
-        # Context-specific responses
         if context.get('ev_charging'):
             return f"{positive_start} I found {spots_found} parking options with EV charging in {location_name}{time_text}! Perfect for your electric vehicle! ⚡"
         elif context.get('accessibility'):
@@ -1064,19 +1060,7 @@ class RealTimeParksyAPI:
         else:
             return f"{positive_start} I discovered {spots_found} great parking options in {location_name}{time_text}{duration_text}!"
 
-    def generate_comprehensive_response(self, spots: List[Dict], context: Dict, location_info: Dict, data_source: str = "mixed") -> Dict:
-        """Generate comprehensive response with all parking information"""
-        total_spots = len(spots)
-        top_spots = spots[:5]
-        
-        # Calculate statistics
-        real_spots = [s for s in spots if s.get('source') == 'HERE_API_REAL']
-        mock_spots = [s for s in spots if s.get('source') != 'HERE_API_REAL']
-        
-        avg_price = self._calculate_average_price(spots)
-        closest_spot = min(spots, key=lambda x: int(x.get('distance', '1000m').replace('m', ''))) if spots else None
-        cheapest_spot = min(spots, key=lambda x: self._extract_price_value(x.get('cost', '£5.00'))) if spots else None
-        best_availability = max(spots, key=lambda x: self._availability_score(x.get('availability', 'Limited'))) if spots else None
+_score(x.get('availability', 'Limited'))) if spots else None
         
         is_fallback = location_info.get('fallback_location', False)
         
@@ -1287,12 +1271,6 @@ class RealTimeParksyAPI:
     def _get_special_features_summary(self, spot: Dict) -> List[str]:
         """Get summary of special features"""
         features = []
-        
-        if spot.get('source') == 'HERE_API_REAL':
-            features.append('🌐 Real HERE.com Data')
-        
-        if spot.get('realtime_availability'):
-            features.append('📊 Real-time Availability')
         
         if spot.get('ev_charging_info'):
             features.append('⚡ EV Charging Available')
