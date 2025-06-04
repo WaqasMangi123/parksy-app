@@ -1045,7 +1045,7 @@ class RealTimeParksyAPI:
         
         return cons
 
-    def generate_human_response(self, context: Dict, location_info: Dict, spots_found: int, is_fallback: bool = False) -> str:
+    def generate_human_response(self, context: Dict, location_info: Dict, spots_found: int) -> str:
         """Generate human-like responses"""
         positive_start = random.choice(self.positive_responses)
         location_name = location_info.get('city', context.get('location', 'your area'))
@@ -1350,8 +1350,6 @@ def chat():
                 ]
             })
 
-        print(f"🔍 Processing parking request for: {context['location']}")
-
         # STEP 1: Try to geocode the location
         lat, lng, address_info, found_location = parksy_api.geocode_location(context['location'])
         
@@ -1365,19 +1363,14 @@ def chat():
         # STEP 3: PRIORITY - Search for REAL HERE.com parking data first
         real_parking_spots = parksy_api.search_real_parking_data(lat, lng, context)
         
-        total_spots_needed = 25  # Aim for 25+ total spots
+        total_spots_needed = 25
         
         # STEP 4: Fill in with professional fallback data if needed
         if len(real_parking_spots) < total_spots_needed:
             spots_needed = total_spots_needed - len(real_parking_spots)
             print(f"🔄 Adding {spots_needed} professional fallback spots to complement {len(real_parking_spots)} real spots")
             
-            if address_info.get('fallback_location'):
-                # Use professional fallback data
-                fallback_spots = parksy_api.generate_professional_fallback_parking(address_info, context)
-            else:
-                # Use enhanced mock data for real location
-                fallback_spots = parksy_api.generate_professional_fallback_parking(address_info, context)
+            fallback_spots = parksy_api.generate_professional_fallback_parking(address_info, context)
             
             # Combine real and fallback data
             all_parking_spots = real_parking_spots + fallback_spots[:spots_needed]
@@ -1389,16 +1382,10 @@ def chat():
             print("⚠️ No parking data generated, creating emergency fallback")
             all_parking_spots = parksy_api.generate_professional_fallback_parking(address_info, context)
 
-        print(f"✅ Final result: {len(all_parking_spots)} total parking spots ({len(real_parking_spots)} real + {len(all_parking_spots) - len(real_parking_spots)} enhanced)")
+        print(f"✅ Final result: {len(all_parking_spots)} total parking spots")
 
         # STEP 6: Generate comprehensive response
-        data_source = "real_time" if real_parking_spots else "professional_database"
-        response_data = parksy_api.generate_comprehensive_response(
-            all_parking_spots, 
-            context, 
-            address_info, 
-            data_source
-        )
+        response_data = parksy_api.generate_comprehensive_response(all_parking_spots, context, address_info)
         
         return jsonify(response_data)
 
