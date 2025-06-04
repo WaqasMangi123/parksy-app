@@ -960,31 +960,29 @@ class EnhancedParksyAPI:
         except:
             return float('inf')
 
-    def _format_spot_for_response(self, spot: Dict, rank: int) -> Dict:
-        """Format parking spot for API response"""
-        return {
-            "rank": rank,
-            "id": spot.get('id', f"spot_{rank}'),
-            "title": spot.get('title', 'Parking Area'),
-            'address': spot.get('address', 'Address available'),
-            "type": "category_type",
-            spot.get('type', '').replace('-', ' ').title(),
-            "distance": f"{spot.get('distance', 0)}m",
-            "walking_time": f"{spot.get('walking_time', 5)} minutes",
-            "pricing": spot.get('pricing', {}),
-            'available': spot.get('availability', {}),
-            'availability': spot.get('restrictions', []),
-            "restrictions": [],
-            'analysis': spot.get('analysis', {}),
-            "recommendation_score": spot.get('recommendation_score', 0),
-            'special_features': self._get_special_features(spot),
-            "contact_info": {
-                'phone': spot.get('phone', ''),
-                'website': spot.get('website', '')
-            },
-            "coordinates": spot.get('position', {}),
-            "realtime_data": spot.get('realtime', {})
-        }
+  def _format_spot_for_response(self, spot: Dict, rank: int) -> Dict:
+    """Format parking spot for API response"""
+    return {
+        "rank": rank,
+        "id": spot.get('id', f"spot_{rank}"),
+        "title": spot.get('title', 'Parking Area'),
+        "address": spot.get('address', 'Address available'),
+        "type": spot.get('type', '').replace('-', ' ').title(),
+        "distance": f"{spot.get('distance', 0)}m",
+        "walking_time": f"{spot.get('walking_time', 5)} minutes",
+        "pricing": spot.get('pricing', {}),
+        "available": spot.get('availability', {}),
+        "restrictions": spot.get('restrictions', []),
+        "analysis": spot.get('analysis', {}),
+        "recommendation_score": spot.get('recommendation_score', 0),
+        "special_features": self._get_special_features(spot),
+        "contact_info": {
+            'phone': spot.get('phone', ''),
+            'website': spot.get('website', '')
+        },
+        "coordinates": spot.get('position', {}),
+        "realtime_data": spot.get('realtime', {})
+    }
 
     def _get_special_features(self, spot: Dict) -> List[str]:
         """Get special features of the parking spot"""
