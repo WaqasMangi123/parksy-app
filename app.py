@@ -1,7 +1,5 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from flask_caching import Cache
 import requests
 import json
@@ -142,7 +140,7 @@ class EnhancedParksyAPI:
             r'for\s+(\d+)\s*minutes?',
             r'all\s+day',
             r'overnight',
-            r'quick\s+stop'
+            r'quick\s*stop'
         ]
         
         for pattern in duration_patterns:
@@ -155,14 +153,14 @@ class EnhancedParksyAPI:
                 elif 'quick' in match.group(0):
                     context['duration'] = '0.5'
                 else:
-                    context['duration'] = match.group(1)
+                    context['duration'] = match.group pastime['value']
                 break
         
         # Extract location (improved cleaning)
         location_text = message
         location_text = re.sub(r'\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)', '', location_text, flags=re.IGNORECASE)
         location_text = re.sub(r'\bfor\s+\d+\s*(?:hours?|minutes?)', '', location_text, flags=re.IGNORECASE)
-        location_text = re.sub(r'\b(?:can|could)\s+i\s+park\s+(?:in|at|near)\s*', '', location_text, flags=re.IGNORECASE)
+        location_text = re.sub(r'\b(?:can|could)\s+i\s*park\s*(?:in|at|near)\s*', '', location_text, flags=re.IGNORECASE)
         location_text = re.sub(r'\b(?:parking|park)\b', '', location_text, flags=re.IGNORECASE)
         location_text = re.sub(r'\b(?:garage|covered|street|lot)\b', '', location_text, flags=re.IGNORECASE)
         context['location'] = location_text.strip()
@@ -898,7 +896,7 @@ class EnhancedParksyAPI:
         cheapest_spot = min(spots, key=lambda x: self._extract_price_value(x.get('pricing', {}).get('hourly_rate', '£5.00'))) if spots else None
         
         return {
-            "message": self.generate_human_response(context, location_info, total_spots),
+            "message": self.generate_friend_response(context, location_info, total_spots),
             "response": f"I've analyzed {total_spots} parking options in {location_info.get('city', 'your area')}. Here's everything you need to know:",
             "summary": {
                 "total_options": total_spots,
@@ -955,35 +953,37 @@ class EnhancedParksyAPI:
             return f"£{avg_price:.2f}/hour"
         return "Varies"
 
-    def _extract_price_value(self, price_str: str) -> float:
-        """Extract numeric value from price string"""
+    def _extract_price(self, value: str) -> float:
+        """Extract price from string"""
         try:
-            return float(price_str.replace('£', ''))
+            return float(value.replace('£', '').split('/')[0])
         except:
-            return 999.99
+            return float('inf')
 
     def _format_spot_for_response(self, spot: Dict, rank: int) -> Dict:
         """Format parking spot for API response"""
         return {
             "rank": rank,
-            "id": spot.get('id', f"spot_{rank}"),
+            "id": spot.get('id', f"spot_{rank}'),
             "title": spot.get('title', 'Parking Area'),
-            "address": spot.get('address', 'Address available'),
-            "type": spot.get('category_type', '').replace('-', ' ').title(),
+            'address': spot.get('address', 'Address available'),
+            "type": "category_type",
+            spot.get('type', '').replace('-', ' ').title(),
             "distance": f"{spot.get('distance', 0)}m",
             "walking_time": f"{spot.get('walking_time', 5)} minutes",
             "pricing": spot.get('pricing', {}),
-            "availability": spot.get('availability', {}),
-            "restrictions": spot.get('restrictions', []),
-            "analysis": spot.get('analysis', {}),
+            'available': spot.get('availability', {}),
+            'availability': spot.get('restrictions', []),
+            "restrictions": [],
+            'analysis': spot.get('analysis', {}),
             "recommendation_score": spot.get('recommendation_score', 0),
-            "special_features": self._get_special_features(spot),
+            'special_features': self._get_special_features(spot),
             "contact_info": {
-                "phone": spot.get('phone', ''),
-                "website": spot.get('website', '')
+                'phone': spot.get('phone', ''),
+                'website': spot.get('website', '')
             },
             "coordinates": spot.get('position', {}),
-            "realtime_data": spot.get('realtime_data', {})
+            "realtime_data": spot.get('realtime', {})
         }
 
     def _get_special_features(self, spot: Dict) -> List[str]:
@@ -1096,10 +1096,10 @@ class EnhancedParksyAPI:
             return ['Weekend afternoons', 'School drop-off/pickup times']
 
     def _get_best_strategy(self, spots: List[Dict], location_info: Dict) -> str:
-        """Get best parking strategy for the area"""
+        """Provide parking strategy for the area"""
         area_type = self._determine_area_type(location_info, spots)
-        garage_count = len([s for s in spots if 'garage' in s.get('category_type', '')])
-        street_count = len([s for s in spots if 'street' in s.get('category_type', '')])
+        garage_count = len([s for s in spots if 'garage' in s.get('category_type', '')])])
+        street_count = len([s for s in spots if 'street' in s.get('category_type', '')]))
         
         if 'City Center' in area_type:
             return "Book garage parking in advance for guaranteed spaces, or arrive early for street parking"
@@ -1261,9 +1261,6 @@ CORS(app)
 # Configure caching
 cache = Cache(app, config={'CACHE_TYPE': 'simple'})
 
-# Configure rate limiting
-limiter = Limiter(app, key_func=get_remote_address, default_limits=["200 per day", "50 per hour"])
-
 enhanced_parksy = EnhancedParksyAPI()
 
 @app.route('/', methods=['GET'])
@@ -1296,7 +1293,6 @@ def home():
     })
 
 @app.route('/api/chat', methods=['POST'])
-@limiter.limit("10 per minute")
 @cache.memoize(timeout=600)
 def enhanced_chat():
     try:
@@ -1414,7 +1410,6 @@ def enhanced_chat():
         }), 500
 
 @app.route('/api/spot-details/<spot_id>', methods=['GET'])
-@limiter.limit("20 per minute")
 @cache.memoize(timeout=600)
 def get_spot_details(spot_id):
     """Get detailed information about a specific parking spot"""
@@ -1448,7 +1443,6 @@ def get_spot_details(spot_id):
         return jsonify({"error": "Spot details unavailable", "status": "error"}), 500
 
 @app.route('/api/area-analysis', methods=['POST'])
-@limiter.limit("10 per minute")
 @cache.memoize(timeout=3600)
 def analyze_parking_area():
     """Analyze parking patterns for a specific area"""
