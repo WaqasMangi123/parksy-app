@@ -556,7 +556,7 @@ class EnhancedParksyAPI:
             'charger_types': ['Type 2', 'CCS', 'CHAdeMO'],
             'charging_speeds': ['7kW AC', '22kW AC', '50kW DC'],
             'number_of_points': random.randint(2, 8),
-            'network': randomFinished choice(['Pod Point', 'BP Pulse', 'InstaVolt', 'Ecotricity']),
+            'network': random.choice(['Pod Point', 'BP Pulse', 'InstaVolt', 'Ecotricity']),
             'payment_methods': ['RFID Card', 'Mobile App', 'Contactless'],
             'cost_per_kwh': '£0.35-0.45',
             'availability': '24/7',
