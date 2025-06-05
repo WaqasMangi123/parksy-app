@@ -12,7 +12,8 @@ from typing import Dict, List, Optional, Union
 
 class EnhancedParksyAPI:
     def __init__(self):
-        self.api_key = os.getenv('HERE_API_KEY', 'demo_key_for_testing')
+          self.api_key ='Qd0u_nG64DhAhLC6M7AT7GlgfLU92OfJf-UFQFVDIy0'
+        # self.api_key = os.getenv('HERE_API_KEY', 'demo_key_for_testing')
         
         # HERE API Endpoints
         self.discover_url = "https://discover.search.hereapi.com/v1/discover"
@@ -103,7 +104,7 @@ class EnhancedParksyAPI:
         
         for pattern in distance_patterns:
             match = re.search(pattern, message_lower)
-            if match and len(match.groups()) > 0 and match.group(1).isdigit():
+            if match and match.group(1).isdigit():
                 context['preferred_distance'] = int(match.group(1))
                 break
             elif 'close' in pattern or 'nearby' in pattern:
@@ -201,165 +202,28 @@ class EnhancedParksyAPI:
             print(f"Geocoding error: {e}")
             return None, None, None, False
 
-    def generate_mock_parking_data(self, address_info: Dict, context: Dict) -> List[Dict]:
-        """Generate comprehensive mock parking data when API fails"""
-        city = address_info.get('city', 'Unknown Location')
-        spots = []
-        
-        # Generate diverse parking options
-        parking_types = [
-            {
-                'title': f'{city} Central Car Park',
-                'type': 'parking-garage',
-                'base_cost': 3.50,
-                'features': ['Covered', 'CCTV', '24/7 Access'],
-                'distance_range': (200, 600)
-            },
-            {
-                'title': f'{city} Shopping Centre Parking',
-                'type': 'parking-lot',
-                'base_cost': 2.00,
-                'features': ['Free 2hrs with purchase', 'Security'],
-                'distance_range': (300, 800)
-            },
-            {
-                'title': f'{city} Street Parking',
-                'type': 'on-street-parking',
-                'base_cost': 2.20,
-                'features': ['Pay & Display', 'Time Limited'],
-                'distance_range': (100, 400)
-            },
-            {
-                'title': f'{city} Park & Ride',
-                'type': 'park-and-ride',
-                'base_cost': 4.00,
-                'features': ['Bus Connection', 'Large Capacity'],
-                'distance_range': (1000, 2000)
-            }
-        ]
-        
-        # Add EV charging spots if requested
-        if context.get('ev_charging'):
-            parking_types.append({
-                'title': f'{city} EV Charging Hub',
-                'type': 'ev-charging',
-                'base_cost': 4.50,
-                'features': ['Fast Charging', 'Multiple Connectors'],
-                'distance_range': (400, 1000)
-            })
-        
-        for i, parking_type in enumerate(parking_types):
-            distance = random.randint(*parking_type['distance_range'])
-            cost_variation = random.uniform(0.8, 1.2)
-            hourly_cost = parking_type['base_cost'] * cost_variation
-            
-            # Calculate recommendation score
-            score = 85 - (i * 5) + random.randint(-5, 5)
-            if context.get('parking_type') and context['parking_type'] in parking_type['type']:
-                score += 10
-            
-            # Availability based on time and type
-            current_hour = datetime.now().hour
-            if 9 <= current_hour <= 17:
-                availability = random.choice(['Available', 'Limited', 'Busy'])
-            else:
-                availability = random.choice(['Available', 'Excellent'])
-            
-            spot = {
-                'id': f"mock_{city.lower()}_{i+1}",
-                'title': parking_type['title'],
-                'address': f"{parking_type['title']}, {city}",
-                'distance': f"{distance}m",
-                'cost': f"£{hourly_cost:.2f}/hour",
-                'availability': availability,
-                'score': max(60, min(95, score)),
-                'type': parking_type['type'].replace('-', ' ').title(),
-                'features': parking_type['features'],
-                'restrictions': self._generate_mock_restrictions(parking_type['type']),
-                'pros': self._generate_mock_pros(parking_type['type'], distance),
-                'cons': self._generate_mock_cons(parking_type['type'])
-            }
-            
-            spots.append(spot)
-        
-        # Sort by score
-        spots.sort(key=lambda x: x['score'], reverse=True)
-        return spots
-
-    def _generate_mock_restrictions(self, parking_type: str) -> List[str]:
-        """Generate realistic restrictions based on parking type"""
-        base_restrictions = ["Payment required", "Valid ticket must be displayed"]
-        
-        if parking_type == 'on-street-parking':
-            return base_restrictions + ["Max 2-4 hours", "No parking 7-9am Mon-Fri"]
-        elif parking_type == 'parking-garage':
-            return base_restrictions + ["Height limit 2.1m", "No overnight without permit"]
-        elif parking_type == 'park-and-ride':
-            return base_restrictions + ["Valid transport ticket required", "No overnight parking"]
-        elif parking_type == 'ev-charging':
-            return base_restrictions + ["EV vehicles only", "Max 4 hour charging"]
-        else:
-            return base_restrictions + ["Check local signage"]
-
-    def _generate_mock_pros(self, parking_type: str, distance: int) -> List[str]:
-        """Generate pros based on parking type and distance"""
-        pros = []
-        
-        if distance < 300:
-            pros.append("Very close to destination")
-        elif distance < 600:
-            pros.append("Reasonable walking distance")
-        
-        if parking_type == 'parking-garage':
-            pros.extend(["Weather protected", "Secure environment"])
-        elif parking_type == 'on-street-parking':
-            pros.extend(["Quick access", "Usually cheaper"])
-        elif parking_type == 'park-and-ride':
-            pros.append("Great for public transport")
-        elif parking_type == 'ev-charging':
-            pros.append("Perfect for electric vehicles")
-        
-        return pros
-
-    def _generate_mock_cons(self, parking_type: str) -> List[str]:
-        """Generate cons based on parking type"""
-        if parking_type == 'parking-garage':
-            return ["Height restrictions", "Can be expensive"]
-        elif parking_type == 'on-street-parking':
-            return ["Time limited", "Weather exposed"]
-        elif parking_type == 'park-and-ride':
-            return ["Requires public transport", "Further from city center"]
-        elif parking_type == 'ev-charging':
-            return ["Limited to EV vehicles", "May need to wait"]
-        else:
-            return ["Check restrictions carefully"]
-
     def search_comprehensive_parking(self, lat: float, lng: float, context: Dict, radius: int = 2000) -> List[Dict]:
         """Comprehensive parking search using all HERE parking features"""
         all_parking_spots = []
         
-        # Try to get real parking data first
-        try:
-            # 1. Discover API for general parking locations
-            parking_spots = self._search_discover_parking(lat, lng, context, radius)
-            all_parking_spots.extend(parking_spots)
-            
-            # 2. Real-time parking availability (if available)
-            if context.get('time') or context.get('urgency') == 'urgent':
-                realtime_data = self._get_realtime_parking_availability(lat, lng, radius)
-                all_parking_spots = self._merge_realtime_data(all_parking_spots, realtime_data)
-            
-            # Remove duplicates and enhance data
-            if all_parking_spots:
-                unique_spots = self._deduplicate_parking_spots(all_parking_spots)
-                enhanced_spots = self._enhance_parking_data(unique_spots, lat, lng, context)
-                return enhanced_spots
-                
-        except Exception as e:
-            print(f"Real API search failed: {e}")
+        # 1. Discover API for general parking locations
+        parking_spots = self._search_discover_parking(lat, lng, context, radius)
+        all_parking_spots.extend(parking_spots)
         
-        # Fallback to mock data
-        return []
+        # 2. Places API for detailed parking information
+        places_spots = self._search_places_parking(lat, lng, context, radius)
+        all_parking_spots.extend(places_spots)
+        
+        # 3. Real-time parking availability (if available)
+        if context.get('time') or context.get('urgency') == 'urgent':
+            realtime_data = self._get_realtime_parking_availability(lat, lng, radius)
+            all_parking_spots = self._merge_realtime_data(all_parking_spots, realtime_data)
+        
+        # Remove duplicates and enhance data
+        unique_spots = self._deduplicate_parking_spots(all_parking_spots)
+        enhanced_spots = self._enhance_parking_data(unique_spots, lat, lng, context)
+        
+        return enhanced_spots
 
     def _search_discover_parking(self, lat: float, lng: float, context: Dict, radius: int) -> List[Dict]:
         """Search using HERE Discover API"""
@@ -404,6 +268,28 @@ class EnhancedParksyAPI:
             except Exception as e:
                 print(f"Discover API error for {category}: {e}")
                 continue
+        
+        return spots
+
+    def _search_places_parking(self, lat: float, lng: float, context: Dict, radius: int) -> List[Dict]:
+        """Search using HERE Places API for detailed parking info"""
+        spots = []
+        
+        params = {
+            'at': f"{lat},{lng}",
+            'q': 'parking',
+            'r': radius,
+            'size': 20,
+            'app_id': 'demo_app_id',  # You'd use your actual app credentials
+            'app_code': 'demo_app_code'
+        }
+        
+        try:
+            # Note: Places API requires different authentication
+            # This is a placeholder for the structure
+            pass
+        except Exception as e:
+            print(f"Places API error: {e}")
         
         return spots
 
@@ -570,7 +456,7 @@ class EnhancedParksyAPI:
             pricing_data['hourly_rate'] = f"£{base_rate:.2f}"
         
         # Add special offers based on context
-        if context.get('duration') and float(context.get('duration', '0')) > 4:
+        if context.get('duration') and int(context.get('duration', '0')) > 4:
             pricing_data['special_offers'] = ['Long stay discount available', 'Daily rate better value']
         
         return pricing_data
@@ -1309,7 +1195,7 @@ class EnhancedParksyAPI:
         if context.get('time'):
             tips.append(f"Peak time parking: consider arriving 15 minutes before {context['time']}")
         
-        if context.get('duration') and float(context.get('duration', '0')) > 4:
+        if context.get('duration') and int(context.get('duration', '0')) > 4:
             tips.append("For long stays, daily rates are usually better value than hourly")
         
         # Area-specific tips
@@ -1456,7 +1342,7 @@ def enhanced_chat():
                         'last_updated': datetime.now().isoformat()
                     },
                     'recommendation_score': spot['score'],
-                    'walking_time': max(1, int(spot['distance'].replace('m', '')) // 80),
+                    'walking_time': max(1, spot['distance'] // 80),
                     'analysis': {
                         'pros': spot['pros'],
                         'cons': spot['cons'],
