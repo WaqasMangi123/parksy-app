@@ -6,23 +6,16 @@ import datetime
 import re
 import os
 from typing import Dict, List, Optional
-import logging
+import time
 
 app = Flask(__name__)
 CORS(app)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 class Parksy:
     def __init__(self):
         # Get API keys from environment variables (secure for deployment)
-        self.here_api_key = os.getenv('HERE_API_KEY')
-        self.openrouter_api_key = os.getenv('OPENROUTER_API_KEY')
-        if not self.here_api_key or not self.openrouter_api_key:
-            logger.error("Missing API keys: HERE_API_KEY or OPENROUTER_API_KEY not set")
-            raise ValueError("API keys must be set in environment variables")
+        self.here_api_key = os.getenv('HERE_API_KEY', 'your_here_api_key_here')
+        self.openrouter_api_key = os.getenv('OPENROUTER_API_KEY', 'your_openrouter_api_key_here')
         
         # API Endpoints
         self.here_geocoding_url = "https://geocode.search.hereapi.com/v1/geocode"
@@ -61,7 +54,7 @@ Remember: You're Parksy, the parking assistant people actually want to talk to. 
         try:
             params = {
                 'q': location,
-                'apiKey': self.here_api_key,  # Updated to match HERE API
+                'apikey': self.here_api_key,
                 'limit': 1
             }
             
@@ -76,11 +69,10 @@ Remember: You're Parksy, the parking assistant people actually want to talk to. 
                     'lng': item['position']['lng'],
                     'address': item['address']['label']
                 }
-            logger.warning(f"No geocoding results for location: {location}")
             return None
             
         except Exception as e:
-            logger.error(f"Geocoding error: {e}")
+            print(f"Geocoding error: {e}")
             return None
 
     def search_parking(self, lat: float, lng: float, radius: int = 1500) -> List[Dict]:
@@ -90,7 +82,7 @@ Remember: You're Parksy, the parking assistant people actually want to talk to. 
                 'at': f"{lat},{lng}",
                 'limit': 20,
                 'q': 'parking',
-                'apiKey': self.here_api_key  # Updated to match HERE API
+                'apikey': self.here_api_key
             }
             
             response = requests.get(self.here_parking_url, params=params, timeout=15)
@@ -110,7 +102,7 @@ Remember: You're Parksy, the parking assistant people actually want to talk to. 
                         'address': spot.get('address', {}).get('label', 'Address not available'),
                         'distance': distance,
                         'position': spot.get('position', {}),
-                        'categories Matthew: categories': spot.get('categories', []),
+                        'categories': spot.get('categories', []),
                         'openingHours': spot.get('openingHours', {}),
                         'pricing': self._extract_pricing(spot),
                         'restrictions': self._extract_restrictions(spot),
@@ -121,11 +113,10 @@ Remember: You're Parksy, the parking assistant people actually want to talk to. 
                     parking_spots.append(parking_info)
             
             parking_spots.sort(key=lambda x: x['distance'])
-            logger.info(f"Found {len(parking_spots)} parking spots for lat={lat}, lng={lng}")
             return parking_spots
             
         except Exception as e:
-            logger.error(f"Parking search error: {e}")
+            print(f"Parking search error: {e}")
             return []
 
     def _calculate_distance(self, lat1: float, lng1: float, lat2: float, lng2: float) -> int:
@@ -238,8 +229,7 @@ Current time: {datetime.datetime.now().strftime('%A, %B %d, %Y at %I:%M %p')}
 
             messages = [
                 {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": context
-                }
+                {"role": "user", "content": context}
             ]
             
             headers = {
@@ -265,10 +255,10 @@ Current time: {datetime.datetime.now().strftime('%A, %B %d, %Y at %I:%M %p')}
             return "Hey! I'm having a bit of trouble right now, but let me try to help you with what I found!"
             
         except Exception as e:
-            logger.error(f"AI response error: {e}")
+            print(f"AI response error: {e}")
             if parking_data:
                 return f"I found {len(parking_data)} parking options for you, but I'm having trouble with my response system. The parking data should still be helpful!"
-            return "I'm having some technical difficulties right now. Could you try asking everything again?"
+            return "I'm having some technical difficulties right now. Could you try asking again?"
 
     def is_parking_related(self, user_input: str) -> bool:
         """Check if user input is parking-related"""
@@ -301,14 +291,11 @@ Current time: {datetime.datetime.now().strftime('%A, %B %d, %Y at %I:%M %p')}
         
         return None
 
-    def process_query(self, user_input: str, session_id: str = "default") -> Dict:
-        """Process user query and return structured response"""
+    def process_query(self, user_input: str, session_id: str = "default") -> str:
+        """Process user query and return response"""
         # Initialize session if needed
         if session_id not in self.conversations:
             self.conversations[session_id] = []
-        # Limit conversation history to prevent memory issues
-        if len(self.conversations[session_id]) > 5:
-            self.conversations[session_id] = self.conversations[session_id][-5:]
         
         # Handle general parking conversation
         if self.is_parking_related(user_input) and not self.extract_location_from_query(user_input):
@@ -337,21 +324,10 @@ Current time: {datetime.datetime.now().strftime('%A, %B %d, %Y at %I:%M %p')}
                 if 'choices' in data and data['choices']:
                     ai_response = data['choices'][0]['message']['content']
                     self.conversations[session_id].append({'user': user_input, 'assistant': ai_response})
-                    return {
-                        'response': ai_response,
-                        'spots': [],
-                        'session_id': session_id,
-                        'timestamp': datetime.datetime.now().isoformat()
-                    }
+                    return ai_response
                     
             except Exception as e:
-                logger.error(f"General chat error: {e}")
-                return {
-                    'response': "Hey! I'm Parksy. Let's talk parking—what's on your mind?",
-                    'spots': [],
-                    'session_id': session_id,
-                    'timestamp': datetime.datetime.now().isoformat()
-                }
+                print(f"General chat error: {e}")
         
         # Extract location for specific searches
         location = self.extract_location_from_query(user_input)
@@ -362,12 +338,7 @@ Current time: {datetime.datetime.now().strftime('%A, %B %d, %Y at %I:%M %p')}
             if not location_info:
                 response = f"Hmm, I'm having trouble finding '{location}'. Could you be a bit more specific? Maybe include a street address or a well-known landmark?"
                 self.conversations[session_id].append({'user': user_input, 'assistant': response})
-                return {
-                    'response': response,
-                    'spots': [],
-                    'session_id': session_id,
-                    'timestamp': datetime.datetime.now().isoformat()
-                }
+                return response
             
             # Search for parking
             parking_data = self.search_parking(location_info['lat'], location_info['lng'])
@@ -375,12 +346,7 @@ Current time: {datetime.datetime.now().strftime('%A, %B %d, %Y at %I:%M %p')}
             # Generate AI response
             ai_response = self.generate_ai_response(user_input, parking_data, location_info, session_id)
             self.conversations[session_id].append({'user': user_input, 'assistant': ai_response})
-            return {
-                'response': ai_response,
-                'spots': parking_data,
-                'session_id': session_id,
-                'timestamp': datetime.datetime.now().isoformat()
-            }
+            return ai_response
         
         else:
             # Handle non-parking or unclear queries
@@ -403,8 +369,27 @@ Current time: {datetime.datetime.now().strftime('%A, %B %d, %Y at %I:%M %p')}
                 }
                 
                 payload = {
-                    "model "
+                    "model": "deepseek/deepseek-r1",
+                    "messages": messages,
+                    "temperature": 0.8,
+                    "max_tokens": 600
+                }
+                
+                response = requests.post(self.openrouter_url, headers=headers, json=payload, timeout=30)
+                response.raise_for_status()
+                
+                data = response.json()
+                if 'choices' in data and data['choices']:
+                    ai_response = data['choices'][0]['message']['content']
+                    self.conversations[session_id].append({'user': user_input, 'assistant': ai_response})
+                    return ai_response
+                    
+            except Exception as e:
+                print(f"Chat error: {e}")
+                
+            return "Hey! I'm Parksy, your parking assistant. What can I help you find today?"
 
+# Initialize Parksy
 parksy = Parksy()
 
 # Flask Routes
@@ -422,25 +407,23 @@ def chat():
         session_id = data.get('session_id', 'web_session')
         
         if not user_message:
-            return jsonify({'error': 'No  message provided'}), 400
+            return jsonify({'error': 'No message provided'}), 400
         
         response = parksy.process_query(user_message, session_id)
         
-        return jsonify(response)
+        return jsonify({
+            'response': response,
+            'session_id': session_id,
+            'timestamp': datetime.datetime.now().isoformat()
+        })
         
     except Exception as e:
-        logger.error(f"Chat endpoint error: {e}")
         return jsonify({'error': f'An error occurred: {str(e)}'}), 500
 
 @app.route('/health')
 def health():
     """Health check endpoint for Render"""
-    return jsonify({
-        'status': 'healthy',
-        'service': 'Parksy AI',
-        'version': '1.0.0',
-        'timestamp': datetime.datetime.now().isoformat()
-    })
+    return jsonify({'status': 'healthy', 'service': 'Parksy AI'})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
