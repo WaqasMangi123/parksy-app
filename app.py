@@ -1,17 +1,24 @@
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import requests
 import json
 import datetime
 import re
 import os
 from typing import Dict, List, Optional
-import time
 import logging
+import random
 from math import radians, cos, sin, asin, sqrt
+from tenacity import retry, stop_after_attempt, wait_exponential
+from html import escape
 
 app = Flask(__name__)
 CORS(app)
+
+# Configure rate limiting
+limiter = Limiter(app, key_func=get_remote_address, default_limits=["100 per day", "10 per minute"])
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +30,7 @@ class Parksy:
         self.openrouter_api_key = os.getenv('OPENROUTER_API_KEY')
         if not self.here_api_key or not self.openrouter_api_key:
             logger.error("Missing API keys: HERE_API_KEY or OPENROUTER_API_KEY not set")
+            raise ValueError("API keys must be set in environment variables")
         
         self.here_geocoding_url = "https://geocode.search.hereapi.com/v1/geocode"
         self.here_parking_url = "https://discover.search.hereapi.com/v1/discover"
@@ -55,10 +63,11 @@ Remember: You're Parksy, the parking assistant people actually want to talk to. 
 
     def generate_fallback_spots(self, location: str) -> List[Dict]:
         """Generate fallback parking spots if HERE API fails"""
-        city = location.split(',')[0].trim().lower()
-        is_edinburgh = city.includes('edinburgh')
-        is_leeds = city.includes('leeds')
+        city = location.split(',')[0].strip().lower()
+        is_edinburgh = 'edinburgh' in city
+        is_leeds = 'leeds' in city
         
+        # Default to London if city not recognized
         city_lat = 55.9533 if is_edinburgh else 53.8008 if is_leeds else 51.5074
         city_lng = -3.1883 if is_edinburgh else -1.5491 else -0.1278
         
@@ -186,6 +195,7 @@ Remember: You're Parksy, the parking assistant people actually want to talk to. 
         
         return rules
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     def geocode_location(self, location: str) -> Optional[Dict]:
         """Convert location string to coordinates using HERE Geocoding API"""
         try:
@@ -210,6 +220,7 @@ Remember: You're Parksy, the parking assistant people actually want to talk to. 
             logger.error(f"Geocoding error for {location}: {e}")
             return None
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     def search_parking(self, lat: float, lng: float, radius: int = 1500) -> List[Dict]:
         """Search for parking spots near coordinates using HERE Discover API"""
         try:
@@ -236,15 +247,10 @@ Remember: You're Parksy, the parking assistant people actually want to talk to. 
                         'address': spot.get('address', {}).get('label', 'Address not available'),
                         'distance': distance,
                         'position': spot.get('position', {'lat': spot_lat, 'lng': spot_lng}),
-                        'recommendation_score': 70 + (20 - len(parking_spots)) * 2,
+                        'walking_time': f"{max(1, int(distance / 80))} min",
                         'pricing': self._extract_pricing(spot),
                         'availability': {'status': 'Unknown', 'spaces_available': None},
-                        'special_features': self._extract_special_features(spot),
-                        'restrictions': self._extract_restrictions(spot),
-                        'uk_specific': True,
-                        'walking_time': f"{max(1, int(distance / 80))} min",
-                        'type': spot.get('categories', [{}])[0].get('name', 'Parking Facility'),
-                        'rank': len(parking_spots) + 1
+                        'type': spot.get('categories', [{}])[0].get('name', 'Parking Facility')
                     })
             
             logger.info(f"Found {len(parking_spots)} parking spots for lat={lat}, lng={lng}")
@@ -301,6 +307,7 @@ Remember: You're Parksy, the parking assistant people actually want to talk to. 
                     features.append("Payment kiosk")
         return features or ["CCTV"]
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     def generate_ai_response(self, user_input: str, parking_data: List[Dict], location_info: Dict, session_id: str) -> str:
         """Generate AI response using OpenRouter"""
         try:
@@ -370,8 +377,11 @@ Found {len(parking_data)} parking spots.
 
     def process_query(self, user_input: str, session_id: str = "default") -> Dict:
         """Process user query and return structured response"""
+        user_input = escape(user_input.strip())
         if session_id not in self.conversations:
             self.conversations[session_id] = []
+        if len(self.conversations[session_id]) > 10:
+            self.conversations[session_id] = self.conversations[session_id][-10:]
         
         if self.is_parking_related(user_input) and not self.extract_location_from_query(user_input):
             try:
@@ -524,6 +534,7 @@ def index():
     return render_template('index.html')
 
 @app.route('/api/chat', methods=['POST'])
+@limiter.limit("100 per day;10 per minute")
 def chat():
     try:
         data = request.get_json()
