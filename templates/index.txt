@@ -1,0 +1,4 @@
+Welcome to Parksy!
+Send parking queries to /api/chat with a JSON payload like:
+
+{"message": "Where can I park near Edinburgh Castle?", "session_id": "user123"}
