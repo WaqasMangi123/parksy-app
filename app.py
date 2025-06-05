@@ -1,24 +1,17 @@
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 import requests
 import json
 import datetime
 import re
 import os
-from typing import Dict, List, Optional
 import logging
 import random
 from math import radians, cos, sin, asin, sqrt
-from tenacity import retry, stop_after_attempt, wait_exponential
 from html import escape
 
 app = Flask(__name__)
 CORS(app)
-
-# Configure rate limiting
-limiter = Limiter(app, key_func=get_remote_address, default_limits=["100 per day", "10 per minute"])
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -61,24 +54,22 @@ Response guidelines:
 
 Remember: You're Parksy, the parking assistant people actually want to talk to. Make finding parking a little less painful! 🅿️"""
 
-    def generate_fallback_spots(self, location: str) -> List[Dict]:
+    def generate_fallback_spots(self, location):
         """Generate fallback parking spots if HERE API fails"""
         city = location.split(',')[0].strip().lower()
         is_edinburgh = 'edinburgh' in city
         is_leeds = 'leeds' in city
         
-        # Default to London if city not recognized
         city_lat = 55.9533 if is_edinburgh else 53.8008 if is_leeds else 51.5074
         city_lng = -3.1883 if is_edinburgh else -1.5491 else -0.1278
         
         return [
             {
-                "id": f"fallback_{city}_1",
-                "title": f"{city.title()} Central Car Park",
-                "address": f"City Centre, {city.title()}",
+                "id": "fallback_{}_1".format(city),
+                "title": "{} Central Car Park".format(city.title()),
+                "address": "City Centre, {}".format(city.title()),
                 "distance": 500,
                 "position": {"lat": city_lat + random.uniform(-0.01, 0.01), "lng": city_lng + random.uniform(-0.01, 0.01)},
-                "recommendation_score": 85,
                 "pricing": {
                     "hourly_rate": "£3.50" if is_edinburgh else "£2.80",
                     "payment_methods": ["Card", "Mobile App", "Cash"],
@@ -87,18 +78,15 @@ Remember: You're Parksy, the parking assistant people actually want to talk to. 
                 "availability": {"status": "Available", "spaces_available": 50},
                 "special_features": ["CCTV", "Pay-and-Display", "Resident Permits"] if is_edinburgh else ["CCTV", "Payment Kiosk"],
                 "restrictions": self._get_city_rules(city),
-                "uk_specific": True,
                 "walking_time": "5 min",
-                "type": "Public Car Park",
-                "rank": 1
+                "type": "Public Car Park"
             },
             {
-                "id": f"fallback_{city}_2",
-                "title": f"{city.title()} Multi-Storey",
-                "address": f"Downtown, {city.title()}",
+                "id": "fallback_{}_2".format(city),
+                "title": "{} Multi-Storey".format(city.title()),
+                "address": "Downtown, {}".format(city.title()),
                 "distance": 700,
                 "position": {"lat": city_lat + random.uniform(-0.01, 0.01), "lng": city_lng + random.uniform(-0.01, 0.01)},
-                "recommendation_score": 80,
                 "pricing": {
                     "hourly_rate": "£3.00" if is_edinburgh else "£2.50",
                     "payment_methods": ["Card", "Mobile App"],
@@ -107,64 +95,20 @@ Remember: You're Parksy, the parking assistant people actually want to talk to. 
                 "availability": {"status": "Limited", "spaces_available": 20},
                 "special_features": ["Disabled Access", "CCTV"],
                 "restrictions": self._get_city_rules(city),
-                "uk_specific": True,
                 "walking_time": "7 min",
-                "type": "Multi-Storey",
-                "rank": 2
-            },
-            {
-                "id": f"fallback_{city}_3",
-                "title": f"{city.title()} Street Parking",
-                "address": f"High Street, {city.title()}",
-                "distance": 300,
-                "position": {"lat": city_lat + random.uniform(-0.01, 0.01), "lng": city_lng + random.uniform(-0.01, 0.01)},
-                "recommendation_score": 75,
-                "pricing": {
-                    "hourly_rate": "£2.80" if is_edinburgh else "£2.20",
-                    "payment_methods": ["Pay & Display", "Mobile App"],
-                    "daily_rate": "£12.00" if is_edinburgh else "£10.00"
-                },
-                "availability": {"status": "Limited", "spaces_available": 10},
-                "special_features": ["Pay & Display", "Time Limited"],
-                "restrictions": self._get_city_rules(city),
-                "uk_specific": True,
-                "walking_time": "3 min",
-                "type": "On-Street",
-                "rank": 3
-            },
-            {
-                "id": f"fallback_{city}_4",
-                "title": f"{city.title()} Park & Ride",
-                "address": f"Outskirts, {city.title()}",
-                "distance": 2000,
-                "position": {"lat": city_lat + random.uniform(-0.01, 0.01), "lng": city_lng + random.uniform(-0.01, 0.01)},
-                "recommendation_score": 70,
-                "pricing": {
-                    "hourly_rate": "£1.50",
-                    "payment_methods": ["Card", "Cash"],
-                    "daily_rate": "£8.00"
-                },
-                "availability": {"status": "Available", "spaces_available": 200},
-                "special_features": ["Bus Connection", "Large Capacity"],
-                "restrictions": self._get_city_rules(city),
-                "uk_specific": True,
-                "walking_time": "20 min",
-                "type": "Park & Ride",
-                "rank": 4
+                "type": "Multi-Storey"
             }
         ]
 
-    def _get_default_uk_rules(self) -> List[str]:
+    def _get_default_uk_rules(self):
         """Default UK parking rules"""
         return [
             "Standard UK parking regulations apply",
             "Check local signage for specific restrictions",
-            "Payment required during operational hours",
-            "Disabled bays are strictly enforced",
-            "No parking on double yellow lines"
+            "Payment required during operational hours"
         ]
 
-    def _get_city_rules(self, city: str) -> List[str]:
+    def _get_city_rules(self, city):
         """City-specific UK parking rules"""
         city_lower = city.lower()
         rules = self._get_default_uk_rules()
@@ -174,34 +118,20 @@ Remember: You're Parksy, the parking assistant people actually want to talk to. 
                 "Congestion Charge may apply (Mon-Fri, 7am-6pm)",
                 "ULEZ charges apply for non-compliant vehicles"
             ])
-        elif 'manchester' in city_lower or 'birmingham' in city_lower:
-            rules.extend([
-                "City centre time limits enforced",
-                "Evening restrictions may apply until 8pm"
-            ])
         elif 'edinburgh' in city_lower:
             rules.extend([
                 "Controlled Parking Zones (CPZs) operate Mon-Fri, 8:30am-6:30pm",
-                "Resident permit zones limit non-permit parking to 4 hours",
-                "Pay-and-display rates vary by zone (£3-£5/hour in central areas)",
-                "Check for event-related restrictions near venues"
-            ])
-        elif 'leeds' in city_lower:
-            rules.extend([
-                "Clean Air Zone charges may apply for non-compliant vehicles",
-                "City centre parking limited to 2-3 hours in some areas",
-                "Evening restrictions in entertainment districts until 8pm"
+                "Pay-and-display rates vary by zone (£3-£5/hour in central areas)"
             ])
         
         return rules
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    def geocode_location(self, location: str) -> Optional[Dict]:
+    def geocode_location(self, location):
         """Convert location string to coordinates using HERE Geocoding API"""
         try:
             params = {
                 'q': location,
-                'apikey': self.here_api_key,
+                'apiKey': self.here_api_key,
                 'limit': 1
             }
             response = requests.get(self.here_geocoding_url, params=params, timeout=10)
@@ -214,21 +144,20 @@ Remember: You're Parksy, the parking assistant people actually want to talk to. 
                     'lng': item['position']['lng'],
                     'address': item['address']['label']
                 }
-            logger.warning(f"No geocoding results for location: {location}")
+            logger.warning("No geocoding results for location: {}".format(location))
             return None
         except requests.RequestException as e:
-            logger.error(f"Geocoding error for {location}: {e}")
+            logger.error("Geocoding error for {}: {}".format(location, e))
             return None
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    def search_parking(self, lat: float, lng: float, radius: int = 1500) -> List[Dict]:
+    def search_parking(self, lat, lng, radius=1500):
         """Search for parking spots near coordinates using HERE Discover API"""
         try:
             params = {
-                'at': f"{lat},{lng}",
-                'limit': 20,
+                'at': "{},{}".format(lat, lng),
+                'limit': 10,
                 'q': 'parking facility',
-                'apikey': self.here_api_key
+                'apiKey': self.here_api_key
             }
             response = requests.get(self.here_parking_url, params=params, timeout=15)
             response.raise_for_status()
@@ -242,25 +171,25 @@ Remember: You're Parksy, the parking assistant people actually want to talk to. 
                     distance = self._calculate_distance(lat, lng, spot_lat, spot_lng)
                     
                     parking_spots.append({
-                        'id': spot.get('id', f"here_{hash(spot['title'])}"),
+                        'id': spot.get('id', "here_{}".format(hash(spot['title']))),
                         'title': spot.get('title', 'Parking Location'),
                         'address': spot.get('address', {}).get('label', 'Address not available'),
                         'distance': distance,
-                        'position': spot.get('position', {'lat': spot_lat, 'lng': spot_lng}),
-                        'walking_time': f"{max(1, int(distance / 80))} min",
+                        'position': {'lat': spot_lat, 'lng': spot_lng},
+                        'walking_time': "{} min".format(max(1, int(distance / 80))),
                         'pricing': self._extract_pricing(spot),
                         'availability': {'status': 'Unknown', 'spaces_available': None},
                         'type': spot.get('categories', [{}])[0].get('name', 'Parking Facility')
                     })
             
-            logger.info(f"Found {len(parking_spots)} parking spots for lat={lat}, lng={lng}")
+            logger.info("Found {} parking spots for lat={}, lng={}".format(len(parking_spots), lat, lng))
             parking_spots.sort(key=lambda x: x['distance'])
             return parking_spots
         except requests.RequestException as e:
-            logger.error(f"Parking search error: {e}")
+            logger.error("Parking search error: {}".format(e))
             return []
 
-    def _calculate_distance(self, lat1: float, lng1: float, lat2: float, lng2: float) -> int:
+    def _calculate_distance(self, lat1, lng1, lat2, lng2):
         """Calculate distance between two points in meters"""
         lat1, lng1, lat2, lng2 = map(radians, [lat1, lng1, lat2, lng2])
         dlat = lat2 - lat1
@@ -270,7 +199,7 @@ Remember: You're Parksy, the parking assistant people actually want to talk to. 
         r = 6371000  # Radius of earth in meters
         return int(c * r)
 
-    def _extract_pricing(self, spot_data: Dict) -> Dict:
+    def _extract_pricing(self, spot_data):
         """Extract pricing information"""
         pricing = {'hourly_rate': 'Unknown', 'payment_methods': ['Card', 'Mobile App']}
         if 'contacts' in spot_data:
@@ -279,93 +208,65 @@ Remember: You're Parksy, the parking assistant people actually want to talk to. 
                     pricing['hourly_rate'] = contact.get('value', 'Unknown')
         return pricing
 
-    def _extract_restrictions(self, spot_data: Dict) -> List[str]:
-        """Extract parking restrictions"""
-        restrictions = []
-        if 'openingHours' in spot_data and spot_data['openingHours'].get('text'):
-            restrictions.append(f"Hours: {spot_data['openingHours']['text']}")
-        for category in spot_data.get('categories', []):
-            name = category.get('name', '').lower()
-            if 'short-term' in name:
-                restrictions.append("Short-term parking only")
-            elif 'long-term' in name:
-                restrictions.append("Long-term parking available")
-        return restrictions or ["Check local signage"]
-
-    def _extract_special_features(self, spot_data: Dict) -> List[str]:
-        """Extract special features"""
-        features = []
-        for category in spot_data.get('categories', []):
-            name = category.get('name', '').lower()
-            if 'accessible' in name:
-                features.append("Wheelchair accessible")
-            if 'covered' in name:
-                features.append("Covered parking")
-        if 'contacts' in spot_data:
-            for contact in spot_data['contacts']:
-                if 'payment' in contact.get('label', '').lower():
-                    features.append("Payment kiosk")
-        return features or ["CCTV"]
-
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    def generate_ai_response(self, user_input: str, parking_data: List[Dict], location_info: Dict, session_id: str) -> str:
+    def generate_ai_response(self, user_input, parking_data, location_info, session_id):
         """Generate AI response using OpenRouter"""
         try:
             conversation_history = self.conversations.get(session_id, [])
             conversation_context = ""
             if conversation_history:
                 conversation_context = "Previous conversation:\n"
-                for entry in conversation_history[-3:]:
-                    conversation_context += f"User: {entry['user']}\nParksy: {entry['assistant']}\n"
+                for entry in conversation_history[-2:]:
+                    conversation_context += "User: {}\nParksy: {}\n".format(entry['user'], entry['assistant'])
                 conversation_context += "\n"
 
-            context = f"""
-{conversation_context}Current query: {user_input}
-Location: {location_info.get('address', 'Unknown') if location_info else 'No specific location'}
-Time: {datetime.datetime.now().strftime('%A, %B %d, %Y at %I:%M %p')}
-Found {len(parking_data)} parking spots.
-"""
+            context = """
+{}Current query: {}
+Location: {}
+Time: {}
+Found {} parking spots.
+""".format(
+                conversation_context,
+                user_input,
+                location_info.get('address', 'Unknown') if location_info else 'No specific location',
+                datetime.datetime.now().strftime('%A, %B %d, %Y at %I:%M %p'),
+                len(parking_data)
+            )
             messages = [
                 {"role": "system", "content": self.system_prompt},
                 {"role": "user", "content": context}
             ]
             headers = {
-                "Authorization": f"Bearer {self.openrouter_api_key}",
+                "Authorization": "Bearer {}".format(self.openrouter_api_key),
                 "Content-Type": "application/json"
             }
             payload = {
                 "model": "deepseek/deepseek-r1",
                 "messages": messages,
                 "temperature": 0.8,
-                "max_tokens": 1500,
-                "top_p": 0.9
+                "max_tokens": 1000
             }
             response = requests.post(self.openrouter_url, headers=headers, json=payload, timeout=30)
             response.raise_for_status()
             data = response.json()
             return data['choices'][0]['message']['content'] if data.get('choices') else "Trouble generating response."
         except requests.RequestException as e:
-            logger.error(f"AI response error: {e}")
-            return f"Found {len(parking_data)} spots, but I'm having trouble with my AI. Check the spots below!"
+            logger.error("AI response error: {}".format(e))
+            return "Found {} spots, but I'm having trouble with my AI. Check the spots below!".format(len(parking_data))
 
-    def is_parking_related(self, user_input: str) -> bool:
+    def is_parking_related(self, user_input):
         """Check if input is parking-related"""
         parking_keywords = [
             'park', 'parking', 'spot', 'garage', 'meter', 'valet',
-            'car', 'vehicle', 'space', 'lot', 'street', 'curb',
-            'ticket', 'fine', 'zone', 'permit', 'handicap', 'disabled'
+            'car', 'vehicle', 'space', 'lot', 'street', 'curb'
         ]
         return any(keyword in user_input.lower() for keyword in parking_keywords)
 
-    def extract_location_from_query(self, user_input: str) -> Optional[str]:
+    def extract_location_from_query(self, user_input):
         """Extract location from query"""
         patterns = [
             r"(?:at|near|in|around|by|close to|next to)\s+([^?.,!]+?)(?:\s+(?:at|for|during)|\s*[?.,!]|$)",
             r"park\s+(?:at|near|in|around|by|close to|next to)\s+([^?.,!]+?)(?:\s+(?:at|for|during)|\s*[?.,!]|$)",
-            r"parking\s+(?:at|near|in|around|by|close to|next to)\s+([^?.,!]+?)(?:\s+(?:at|for|during)|\s*[?.,!]|$)",
-            r"(?:where|how|can)\s+.*?(?:at|near|in|around|by)\s+([^?.,!]+?)(?:\s*[?.,!]|$)",
-            r"going\s+to\s+([^?.,!]+?)(?:\s+(?:at|for|during)|\s*[?.,!]|$)",
-            r"visiting\s+([^?.,!]+?)(?:\s+(?:at|for|during)|\s*[?.,!]|$)"
+            r"parking\s+(?:at|near|in|around|by|close to|next to)\s+([^?.,!]+?)(?:\s+(?:at|for|during)|\s*[?.,!]|$)"
         ]
         for pattern in patterns:
             match = re.search(pattern, user_input, re.IGNORECASE)
@@ -375,29 +276,29 @@ Found {len(parking_data)} parking spots.
                     return location
         return None
 
-    def process_query(self, user_input: str, session_id: str = "default") -> Dict:
+    def process_query(self, user_input, session_id="default"):
         """Process user query and return structured response"""
         user_input = escape(user_input.strip())
         if session_id not in self.conversations:
             self.conversations[session_id] = []
-        if len(self.conversations[session_id]) > 10:
-            self.conversations[session_id] = self.conversations[session_id][-10:]
+        if len(self.conversations[session_id]) > 5:
+            self.conversations[session_id] = self.conversations[session_id][-5:]
         
         if self.is_parking_related(user_input) and not self.extract_location_from_query(user_input):
             try:
                 messages = [
                     {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": f"User said: {user_input}\n\nGeneral parking question. Respond as Parksy."}
+                    {"role": "user", "content": "User said: {}\n\nGeneral parking question. Respond as Parksy.".format(user_input)}
                 ]
                 headers = {
-                    "Authorization": f"Bearer {self.openrouter_api_key}",
+                    "Authorization": "Bearer {}".format(self.openrouter_api_key),
                     "Content-Type": "application/json"
                 }
                 payload = {
                     "model": "deepseek/deepseek-r1",
                     "messages": messages,
                     "temperature": 0.8,
-                    "max_tokens": 800
+                    "max_tokens": 600
                 }
                 response = requests.post(self.openrouter_url, headers=headers, json=payload, timeout=30)
                 response.raise_for_status()
@@ -408,41 +309,39 @@ Found {len(parking_data)} parking spots.
                     'message': ai_response,
                     'spots': [],
                     'data_status': {'real_time': False, 'last_updated': datetime.datetime.now().isoformat()},
-                    'data_sources': {'primary_source': 'OpenRouter', 'real_time_spots': 0, 'enhanced_database_spots': 0}
+                    'data_sources': {'primary_source': 'OpenRouter', 'real_time_spots': 0}
                 }
             except requests.RequestException as e:
-                logger.error(f"General chat error: {e}")
+                logger.error("General chat error: {}".format(e))
                 return {
                     'message': "Hey! I'm Parksy. Let's talk parking—what's on your mind?",
                     'spots': [],
                     'data_status': {'real_time': False, 'last_updated': datetime.datetime.now().isoformat()},
-                    'data_sources': {'primary_source': 'Fallback', 'real_time_spots': 0, 'enhanced_database_spots': 0}
+                    'data_sources': {'primary_source': 'Fallback', 'real_time_spots': 0}
                 }
 
         location = self.extract_location_from_query(user_input)
         if location:
             location_info = self.geocode_location(location)
             if not location_info:
-                ai_response = f"Hmm, I couldn't find '{location}'. Try a more specific address or landmark?"
+                ai_response = "Hmm, I couldn't find '{}'. Try a more specific address or landmark?".format(location)
                 self.conversations[session_id].append({'user': user_input, 'assistant': ai_response})
                 return {
                     'message': ai_response,
                     'spots': self.generate_fallback_spots(location),
                     'data_status': {'real_time': False, 'last_updated': datetime.datetime.now().isoformat()},
-                    'data_sources': {'primary_source': 'Fallback', 'real_time_spots': 0, 'enhanced_database_spots': 4}
+                    'data_sources': {'primary_source': 'Fallback', 'real_time_spots': 0}
                 }
             
             parking_data = self.search_parking(location_info['lat'], location_info['lng'])
             if not parking_data:
-                logger.warning(f"No parking spots found for {location}")
+                logger.warning("No parking spots found for {}".format(location))
                 parking_data = self.generate_fallback_spots(location)
                 source = 'Fallback'
                 real_time_spots = 0
-                database_spots = len(parking_data)
             else:
                 source = 'HERE API'
                 real_time_spots = len(parking_data)
-                database_spots = 0
             
             ai_response = self.generate_ai_response(user_input, parking_data, location_info, session_id)
             self.conversations[session_id].append({'user': user_input, 'assistant': ai_response})
@@ -452,28 +351,11 @@ Found {len(parking_data)} parking spots.
                 'spots': parking_data,
                 'summary': {
                     'total_options': len(parking_data),
-                    'average_price': 'Unknown',
-                    'closest_option': {'distance': min((spot['distance'] for spot in parking_data), default=0)},
-                    'cheapest_option': {'price': 'Unknown'}
+                    'closest_option': {'distance': min((spot['distance'] for spot in parking_data), default=0)}
                 },
                 'search_context': {
                     'location': location_info.get('address', location),
                     'local_regulations': self._get_city_rules(location.lower())
-                },
-                'area_insights': {
-                    'area_type': 'Urban',
-                    'parking_density': 'Moderate',
-                    'typical_pricing': '£2.50/hour',
-                    'best_parking_strategy': 'Arrive early'
-                },
-                'tips': [
-                    "Check parking apps for real-time availability",
-                    "Avoid peak hours in city centres"
-                ],
-                'recommendations': {
-                    'best_overall': parking_data[0] if parking_data else None,
-                    'best_value': parking_data[1] if len(parking_data) > 1 else None,
-                    'closest': parking_data[0] if parking_data else None
                 },
                 'data_status': {
                     'real_time': source == 'HERE API',
@@ -481,8 +363,7 @@ Found {len(parking_data)} parking spots.
                 },
                 'data_sources': {
                     'primary_source': source,
-                    'real_time_spots': real_time_spots,
-                    'enhanced_database_spots': database_spots
+                    'real_time_spots': real_time_spots
                 }
             }
         
@@ -492,13 +373,13 @@ Found {len(parking_data)} parking spots.
                 if self.conversations[session_id]:
                     conversation_context = "Previous conversation:\n"
                     for entry in self.conversations[session_id][-2:]:
-                        conversation_context += f"User: {entry['user']}\nParksy: {entry['assistant']}\n"
+                        conversation_context += "User: {}\nParksy: {}\n".format(entry['user'], entry['assistant'])
                 messages = [
                     {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": f"{conversation_context}\nUser said: {user_input}\nRespond as Parksy."}
+                    {"role": "user", "content": "{}\nUser said: {}\nRespond as Parksy.".format(conversation_context, user_input)}
                 ]
                 headers = {
-                    "Authorization": f"Bearer {self.openrouter_api_key}",
+                    "Authorization": "Bearer {}".format(self.openrouter_api_key),
                     "Content-Type": "application/json"
                 }
                 payload = {
@@ -516,15 +397,15 @@ Found {len(parking_data)} parking spots.
                     'message': ai_response,
                     'spots': [],
                     'data_status': {'real_time': False, 'last_updated': datetime.datetime.now().isoformat()},
-                    'data_sources': {'primary_source': 'OpenRouter', 'real_time_spots': 0, 'enhanced_database_spots': 0}
+                    'data_sources': {'primary_source': 'OpenRouter', 'real_time_spots': 0}
                 }
             except requests.RequestException as e:
-                logger.error(f"Chat error: {e}")
+                logger.error("Chat error: {}".format(e))
                 return {
                     'message': "Hey! I'm Parksy, your parking assistant. What's up?",
                     'spots': [],
                     'data_status': {'real_time': False, 'last_updated': datetime.datetime.now().isoformat()},
-                    'data_sources': {'primary_source': 'Fallback', 'real_time_spots': 0, 'enhanced_database_spots': 0}
+                    'data_sources': {'primary_source': 'Fallback', 'real_time_spots': 0}
                 }
 
 parksy = Parksy()
@@ -534,7 +415,6 @@ def index():
     return render_template('index.html')
 
 @app.route('/api/chat', methods=['POST'])
-@limiter.limit("100 per day;10 per minute")
 def chat():
     try:
         data = request.get_json()
@@ -545,8 +425,8 @@ def chat():
         response = parksy.process_query(user_message, session_id)
         return jsonify(response)
     except Exception as e:
-        logger.error(f"Chat endpoint error: {e}")
-        return jsonify({'error': f'An error occurred: {str(e)}'}), 500
+        logger.error("Chat endpoint error: {}".format(e))
+        return jsonify({'error': 'An error occurred: {}'.format(str(e))}), 500
 
 @app.route('/health')
 def health():
